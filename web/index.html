@@ -32,6 +32,7 @@
         <button type="button" data-view="gustos" class="nav-btn">
           <svg viewBox="0 0 24 24"><path d="M12 20s-7-4.4-7-9a4 4 0 0 1 7-2 4 4 0 0 1 7 2c0 4.6-7 9-7 9z"/></svg>
           Me gusta
+          <span class="nav-badge" data-likes-badge hidden>0</span>
         </button>
         <button type="button" data-view="nuevos" class="nav-btn">
           <svg viewBox="0 0 24 24"><path d="M12 3v10l6 3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>
@@ -48,7 +49,7 @@
           <button type="button" data-view="inicio">Inicio</button>
           <button type="button" data-view="buscar">Buscar</button>
           <button type="button" data-view="biblioteca">Biblioteca</button>
-          <button type="button" data-view="gustos">Me gusta</button>
+          <button type="button" data-view="gustos">Me gusta <span class="nav-badge" data-likes-badge hidden>0</span></button>
           <button type="button" data-view="nuevos">Nuevos</button>
         </nav>
         <div class="sync-bar">
@@ -84,6 +85,7 @@
               <button type="button" id="ficha-next" class="icon-btn" aria-label="Siguiente">
                 <svg viewBox="0 0 24 24"><path d="M18 6v12M6 6l10 6-10 6z"/></svg>
               </button>
+              <button type="button" id="ficha-like" class="icon-btn like" aria-label="Me gusta" aria-pressed="false">♡</button>
             </div>
             <div class="seek-row ficha-seek">
               <span id="ficha-current">0:00</span>
@@ -91,9 +93,10 @@
               <span id="ficha-total">0:00</span>
             </div>
           </div>
-          <article class="ficha-lyrics-card">
-            <h3>Letra</h3>
-            <div id="ficha-lyrics" class="lyrics" spellcheck="false"></div>
+          <article class="ficha-lyrics-card ficha-karaoke-pane">
+            <h3>Karaoke</h3>
+            <p class="karaoke-hint">Seguimiento por líneas para cantar</p>
+            <div id="ficha-lyrics" class="lyrics karaoke" spellcheck="false"></div>
           </article>
         </div>
       </section>

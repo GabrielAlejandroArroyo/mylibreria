@@ -20,6 +20,8 @@ const state = {
   likes: new Set(JSON.parse(localStorage.getItem("suno-likes") || "[]")),
   recent: JSON.parse(localStorage.getItem("suno-recent") || "[]"),
   lyrics: new Map(),
+  karaokeTimelines: new Map(),
+  karaokeActive: -1,
   seeking: false,
   localApi: "",
   nuevos: [],
@@ -110,6 +112,53 @@ function saveLikes() {
   localStorage.setItem("suno-likes", JSON.stringify([...state.likes]));
 }
 
+function updateLikesBadge() {
+  const count = state.likes.size;
+  document.querySelectorAll("[data-likes-badge]").forEach((badge) => {
+    badge.textContent = String(count);
+    badge.hidden = count === 0;
+  });
+}
+
+function paintLikeButtons(track) {
+  const currentId = track?.id || currentTrack()?.id || "";
+  document.querySelectorAll("#like-btn, #ficha-like").forEach((button) => {
+    const on = Boolean(currentId && state.likes.has(currentId));
+    button.classList.toggle("is-on", on);
+    button.textContent = on ? "♥" : "♡";
+    button.setAttribute("aria-pressed", on ? "true" : "false");
+  });
+  document.querySelectorAll("[data-like]").forEach((button) => {
+    const liked = state.likes.has(button.dataset.like);
+    button.classList.toggle("is-on", liked);
+    button.textContent = liked ? "♥" : "♡";
+    button.setAttribute("aria-pressed", liked ? "true" : "false");
+  });
+}
+
+function toggleLike(trackId) {
+  if (!trackId) return;
+  if (state.likes.has(trackId)) state.likes.delete(trackId);
+  else state.likes.add(trackId);
+  saveLikes();
+  updateLikesBadge();
+  paintLikeButtons(byId(trackId));
+  paintPlayer();
+  if (state.view === "gustos" || state.view === "inicio") render();
+}
+
+function seedLikesFromCatalog() {
+  let added = false;
+  for (const track of state.tracks) {
+    if (track.me_gusta && !state.likes.has(track.id)) {
+      state.likes.add(track.id);
+      added = true;
+    }
+  }
+  if (added) saveLikes();
+  updateLikesBadge();
+}
+
 function remember(track) {
   state.recent = [track.id, ...state.recent.filter((id) => id !== track.id)].slice(0, 24);
   localStorage.setItem("suno-recent", JSON.stringify(state.recent));
@@ -147,9 +196,11 @@ function greeting() {
 
 function card(track) {
   const playing = isTrackPlaying(track);
+  const liked = state.likes.has(track.id);
   return `
     <article class="card" data-id="${track.id}">
       <div class="card-cover" style="${coverStyle(track)}"></div>
+      <button class="card-like ${liked ? "is-on" : ""}" data-like="${track.id}" aria-label="Me gusta" aria-pressed="${liked}">${liked ? "♥" : "♡"}</button>
       <button class="play-fab" data-play="${track.id}" aria-label="Reproducir">${playing ? PAUSE : PLAY}</button>
       <h3>${escapeHtml(track.titulo)}${track.nuevo ? '<span class="badge-new">NUEVO</span>' : ""}</h3>
       <p>${escapeHtml(track.etiquetas.slice(0, 2).join(" · ") || track.autor)}</p>
@@ -257,6 +308,10 @@ function render() {
     scheduleWarmVisible();
     return;
   }
+  if (state.view === "gustos" && !tracks.length) {
+    viewEl.innerHTML = `<div class="empty">Todavía no marcaste ningún tema. Tocá ♡ en una tarjeta o en la ficha para guardarlo acá.</div>`;
+    return;
+  }
   const title = state.tag || (state.view === "gustos" ? "Me gusta" : state.view === "nuevos" ? "Temas nuevos" : state.query ? `Resultados de “${state.query}”` : "Tu biblioteca");
   if (state.view === "buscar" || state.tag) {
     viewEl.innerHTML = `
@@ -281,7 +336,6 @@ function paintPlayer() {
   const title = document.querySelector("#now-title");
   const artist = document.querySelector("#now-artist");
   const cover = document.querySelector("#now-cover");
-  const like = document.querySelector("#like-btn");
   const link = document.querySelector("#suno-link");
   const isPaused = isPlaybackPaused();
   document.querySelector("#play-icon").outerHTML = isPaused ? PLAY.replace("<svg", '<svg id="play-icon"') : PAUSE.replace("<svg", '<svg id="play-icon"');
@@ -292,15 +346,14 @@ function paintPlayer() {
     title.textContent = "Elegí un tema";
     artist.textContent = `${state.tracks.length} temas en la biblioteca`;
     cover.style.cssText = "";
-    like.classList.remove("is-on");
+    paintLikeButtons(null);
     link.hidden = true;
     return;
   }
   title.textContent = track.titulo;
   artist.textContent = track.etiquetas[0] || track.autor;
   cover.style.cssText = coverStyle(track);
-  like.classList.toggle("is-on", state.likes.has(track.id));
-  like.textContent = state.likes.has(track.id) ? "♥" : "♡";
+  paintLikeButtons(track);
   link.hidden = true;
   document.title = `${track.titulo} — Suno`;
   paintFicha(isPaused);
@@ -335,14 +388,17 @@ async function paintFicha(isPaused) {
     ? PLAY.replace("<svg", '<svg id="ficha-play-icon"')
     : PAUSE.replace("<svg", '<svg id="ficha-play-icon"');
   document.querySelector("#ficha-total").textContent = formatTime(track.duracion_seg);
+  paintLikeButtons(track);
   const lyricsBox = document.querySelector("#ficha-lyrics");
   lyricsBox.setAttribute("contenteditable", "false");
-  if (lyricsBox.dataset.track === track.id) return;
-  lyricsBox.dataset.track = track.id;
-  lyricsBox.innerHTML = `<p class="muted">Cargando letra…</p>`;
-  const lyrics = await loadLyrics(track);
-  if (currentTrack()?.id !== track.id || sheet.hidden) return;
-  lyricsBox.innerHTML = formatLyrics(lyrics);
+  if (lyricsBox.dataset.track !== track.id) {
+    lyricsBox.dataset.track = track.id;
+    lyricsBox.innerHTML = `<p class="muted">Cargando letra…</p>`;
+    const lyrics = await loadLyrics(track);
+    if (currentTrack()?.id !== track.id || sheet.hidden) return;
+    mountKaraoke(track, lyrics, lyricsBox);
+  }
+  updateKaraokeHighlight(playbackElapsed());
 }
 
 function audioUrl(track) {
@@ -485,6 +541,7 @@ function tickEmbedProgress() {
     document.querySelector("#seek").value = value;
     document.querySelector("#ficha-seek").value = value;
   }
+  updateKaraokeHighlight(elapsed);
 }
 
 function startEmbedTimers(track) {
@@ -531,9 +588,85 @@ async function loadLyrics(track) {
   return detail.letra || "";
 }
 
+function parseLyricLines(text) {
+  return String(text || "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => ({ kind: /^\[[^\]]+\]$/.test(line) ? "section" : "line", text: line }));
+}
+
+function buildLineTimeline(items, durationSec) {
+  const duration = Math.max(Number(durationSec) || 0, 1);
+  const weights = items.map((item) => (item.kind === "line" ? Math.max(item.text.length, 8) : 0));
+  const totalWeight = weights.reduce((sum, value) => sum + value, 0) || 1;
+  let cursor = 0;
+  let lineIndex = 0;
+  return items.map((item, index) => {
+    if (item.kind !== "line") return { ...item, startSec: 0, endSec: 0, lineIndex: -1 };
+    const span = (weights[index] / totalWeight) * duration;
+    const startSec = cursor;
+    cursor += span;
+    const current = lineIndex;
+    lineIndex += 1;
+    return { ...item, startSec, endSec: cursor, lineIndex: current };
+  });
+}
+
+function renderKaraokeDom(items) {
+  if (!items.length) return `<p class="muted">Este tema no tiene letra guardada.</p>`;
+  return items
+    .map((item) => (
+      item.kind === "section"
+        ? `<p class="karaoke-section">${escapeHtml(item.text)}</p>`
+        : `<p class="karaoke-line" data-i="${item.lineIndex}">${escapeHtml(item.text)}</p>`
+    ))
+    .join("");
+}
+
+function mountKaraoke(track, lyrics, target) {
+  const timeline = buildLineTimeline(parseLyricLines(lyrics), track.duracion_seg);
+  state.karaokeTimelines.set(track.id, timeline);
+  state.karaokeActive = -1;
+  target.innerHTML = renderKaraokeDom(timeline);
+}
+
+function playbackElapsed() {
+  const track = currentTrack();
+  if (state.usingEmbed && state.embedStarted) {
+    return Math.min(track?.duracion_seg || 0, (Date.now() - state.embedStarted) / 1000);
+  }
+  return audio.currentTime || 0;
+}
+
+function updateKaraokeHighlight(elapsedSec) {
+  const track = currentTrack();
+  if (!track) return;
+  const timeline = state.karaokeTimelines.get(track.id);
+  if (!timeline) return;
+  const singable = timeline.filter((item) => item.kind === "line");
+  let active = 0;
+  for (const item of singable) {
+    if (elapsedSec >= item.startSec) active = item.lineIndex;
+  }
+  if (state.karaokeActive === active) return;
+  state.karaokeActive = active;
+  document.querySelectorAll("#ficha-lyrics .karaoke-line, #panel-body .karaoke-line").forEach((node) => {
+    const index = Number(node.dataset.i);
+    node.classList.toggle("is-past", index < active);
+    node.classList.toggle("is-active", index === active);
+    node.classList.toggle("is-next", index === active + 1);
+  });
+  document.querySelectorAll("#ficha-lyrics .karaoke-line.is-active, #panel-body .karaoke-line.is-active").forEach((node) => {
+    const box = node.parentElement;
+    if (!box) return;
+    const top = node.offsetTop - box.clientHeight / 2 + node.clientHeight / 2;
+    if (Math.abs(box.scrollTop - top) > 16) box.scrollTo({ top, behavior: "smooth" });
+  });
+}
+
 function formatLyrics(text) {
-  if (!text.trim()) return `<p class="muted">Este tema no tiene letra guardada.</p>`;
-  return `<div class="lyrics">${escapeHtml(text).replace(/^\[(.+)\]/gm, '<span class="section">[$1]</span>')}</div>`;
+  return renderKaraokeDom(buildLineTimeline(parseLyricLines(text), currentTrack()?.duracion_seg || 1));
 }
 
 async function renderPanel() {
@@ -556,7 +689,8 @@ async function renderPanel() {
   panelBody.innerHTML = `<p class="muted">Cargando letra…</p>`;
   const lyrics = await loadLyrics(track);
   if (currentTrack()?.id !== track.id || state.tab !== "letra") return;
-  panelBody.innerHTML = formatLyrics(lyrics);
+  mountKaraoke(track, lyrics, panelBody);
+  updateKaraokeHighlight(playbackElapsed());
 }
 
 function openPanel(tab) {
@@ -597,6 +731,7 @@ function playTrack(track, queue) {
   } else {
     playInPage(track);
   }
+  state.karaokeActive = -1;
   remember(track);
   openFicha();
   paintPlayer();
@@ -685,6 +820,12 @@ document.body.addEventListener("click", (event) => {
     if (list[0]) playFromList(list[0].id, list);
     return;
   }
+  const likeHit = event.target.closest("[data-like]");
+  if (likeHit) {
+    event.stopPropagation();
+    toggleLike(likeHit.dataset.like);
+    return;
+  }
   const fab = event.target.closest("[data-play]");
   if (fab) {
     event.stopPropagation();
@@ -758,15 +899,11 @@ document.querySelector("#repeat").addEventListener("click", () => {
 });
 document.querySelector("#like-btn").addEventListener("click", () => {
   const track = currentTrack();
-  if (!track) return;
-  if (state.likes.has(track.id)) state.likes.delete(track.id);
-  else state.likes.add(track.id);
-  saveLikes();
-  paintPlayer();
-  if (state.view === "gustos" || state.view === "inicio") {
-    render();
-    paintPlayer();
-  }
+  if (track) toggleLike(track.id);
+});
+document.querySelector("#ficha-like").addEventListener("click", () => {
+  const track = currentTrack();
+  if (track) toggleLike(track.id);
 });
 document.querySelector("#lyrics-btn").addEventListener("click", () => {
   if (!panel.hidden && state.tab === "letra") closePanel();
@@ -798,6 +935,7 @@ audio.addEventListener("timeupdate", () => {
   document.querySelector("#time-current").textContent = formatTime(audio.currentTime);
   document.querySelector("#time-total").textContent = formatTime(audio.duration || currentTrack()?.duracion_seg || 0);
   if (!state.seeking && audio.duration) seek.value = String(Math.floor((audio.currentTime / audio.duration) * 1000));
+  updateKaraokeHighlight(audio.currentTime);
 });
 audio.addEventListener("play", paintPlayer);
 audio.addEventListener("pause", paintPlayer);
@@ -861,6 +999,7 @@ async function reloadCatalog() {
   state.tracks = payload.temas || [];
   state.tags = payload.etiquetas || [];
   state.nuevos = payload.nuevos || [];
+  seedLikesFromCatalog();
   renderTags();
   render();
   paintPlayer();

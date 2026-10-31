@@ -78,6 +78,19 @@ a { color: inherit; }
 .nav-btn svg, .icon-btn svg { width: 22px; height: 22px; fill: currentColor; }
 .nav-btn:hover, .tag-btn:hover, .nav-btn.is-active, .tag-btn.is-active { color: #fff; }
 .nav-btn.is-active { background: #1a1a1a; }
+.nav-badge {
+  margin-left: auto;
+  min-width: 20px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: #1ed760;
+  color: #000;
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 18px;
+  text-align: center;
+}
+.mobile-nav .nav-badge { margin-left: 6px; }
 .side-label {
   margin: 22px 12px 8px;
   font-size: 12px;
@@ -238,6 +251,21 @@ dialog textarea {
 }
 .card:hover { background: var(--card-hover); }
 .card-cover { aspect-ratio: 1; border-radius: 4px; margin-bottom: 12px; }
+.card-like {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  width: 32px;
+  height: 32px;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(0,0,0,.55);
+  color: #fff;
+  font-size: 16px;
+  line-height: 1;
+  z-index: 2;
+}
+.card-like.is-on { color: var(--green); }
 .card h3, .track-title { margin: 0; font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .card p, .muted { margin: 6px 0 0; color: var(--muted); font-size: 13px; }
 .play-fab {
@@ -383,9 +411,10 @@ dialog textarea {
 .ficha-top { display: flex; align-items: center; gap: 16px; margin-bottom: 18px; }
 .ficha-grid {
   display: grid;
-  grid-template-columns: 1fr;
-  gap: 22px;
-  max-width: 760px;
+  grid-template-columns: minmax(260px, 340px) minmax(0, 1fr);
+  gap: 28px;
+  max-width: none;
+  align-items: start;
 }
 .ficha-cover {
   width: min(100%, 280px);
@@ -405,30 +434,68 @@ dialog textarea {
 .play-xl { width: 58px; height: 58px; }
 .play-xl svg { width: 26px; height: 26px; }
 .ficha-seek { width: 100%; margin-top: 8px; }
-.ficha-lyrics-card {
-  background: rgba(0,0,0,.35);
+.ficha-lyrics-card,
+.ficha-karaoke-pane {
+  background: rgba(0,0,0,.42);
   border: 1px solid rgba(255,255,255,.06);
   border-radius: 16px;
   padding: 22px 26px 28px;
-  min-height: 420px;
+  min-height: calc(100vh - 220px);
+  display: flex;
+  flex-direction: column;
 }
-.ficha-lyrics-card h3 {
-  margin: 0 0 14px;
+.ficha-lyrics-card h3,
+.ficha-karaoke-pane h3 {
+  margin: 0 0 6px;
   font-size: 13px;
   letter-spacing: 0.12em;
   text-transform: uppercase;
   color: var(--muted);
 }
-.ficha .lyrics {
-  font-size: 20px;
-  line-height: 1.7;
+.karaoke-hint {
+  margin: 0 0 16px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.ficha .lyrics,
+#ficha-lyrics {
+  flex: 1;
+  font-size: 24px;
+  line-height: 1.65;
   color: #f2f2f2;
   user-select: text;
   cursor: default;
   caret-color: transparent;
-  max-height: min(62vh, 640px);
+  max-height: calc(100vh - 260px);
   overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
+.karaoke-section {
+  margin: 12px 0 4px;
+  font-size: 13px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.karaoke-line {
+  margin: 0;
+  opacity: 0.55;
+  transform: scale(0.98);
+  transform-origin: left center;
+  transition: color .18s ease, opacity .18s ease, transform .18s ease;
+}
+.karaoke-line.is-past { opacity: 0.4; }
+.karaoke-line.is-next { opacity: 0.75; }
+.karaoke-line.is-active {
+  opacity: 1;
+  color: #1ed760;
+  font-weight: 650;
+  font-size: 28px;
+  transform: scale(1.02);
+}
+.panel-body .karaoke-line.is-active { font-size: 18px; }
 .now { cursor: pointer; }
 .now, .extras, .transport-btns { display: flex; align-items: center; gap: 10px; }
 .now-cover { width: 58px; height: 58px; border-radius: 4px; background: #333; flex: none; }
@@ -475,5 +542,8 @@ input[type="range"]::-webkit-slider-thumb {
   .hero h1 { font-size: 32px; }
   .main { overflow: visible; }
   .ficha-side h2 { font-size: 30px; }
-  .ficha .lyrics { font-size: 17px; }
+  .ficha-grid { grid-template-columns: 1fr; }
+  .ficha-karaoke-pane { min-height: 360px; }
+  .ficha .lyrics, #ficha-lyrics { font-size: 18px; max-height: 52vh; }
+  .karaoke-line.is-active { font-size: 22px; }
 }
