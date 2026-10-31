@@ -59,6 +59,41 @@
         </div>
       </header>
       <div id="view" class="view"></div>
+      <section id="ficha" class="ficha" hidden>
+        <div id="ficha-bg" class="ficha-bg"></div>
+        <div class="ficha-top">
+          <button type="button" id="ficha-back" class="btn-ghost">Volver</button>
+          <span class="kicker">Reproduciendo</span>
+        </div>
+        <div class="ficha-grid">
+          <div class="ficha-side">
+            <div id="ficha-cover" class="ficha-cover"></div>
+            <h2 id="ficha-title"></h2>
+            <p id="ficha-artist" class="ficha-artist"></p>
+            <div id="ficha-chips" class="chips"></div>
+            <div class="ficha-controls">
+              <button type="button" id="ficha-prev" class="icon-btn" aria-label="Anterior">
+                <svg viewBox="0 0 24 24"><path d="M6 6v12M18 6 8 12l10 6z"/></svg>
+              </button>
+              <button type="button" id="ficha-play" class="play-main play-xl" aria-label="Reproducir">
+                <svg id="ficha-play-icon" viewBox="0 0 24 24"><path d="M8 5v14l12-7z"/></svg>
+              </button>
+              <button type="button" id="ficha-next" class="icon-btn" aria-label="Siguiente">
+                <svg viewBox="0 0 24 24"><path d="M18 6v12M6 6l10 6-10 6z"/></svg>
+              </button>
+            </div>
+            <div class="seek-row ficha-seek">
+              <span id="ficha-current">0:00</span>
+              <input id="ficha-seek" type="range" min="0" max="1000" value="0" aria-label="Progreso" />
+              <span id="ficha-total">0:00</span>
+            </div>
+          </div>
+          <article class="ficha-lyrics-card">
+            <h3>Letra</h3>
+            <div id="ficha-lyrics" class="lyrics" spellcheck="false"></div>
+          </article>
+        </div>
+      </section>
     </main>
 
     <aside id="panel" class="panel" hidden>

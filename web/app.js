@@ -267,6 +267,46 @@ function paintPlayer() {
   like.textContent = state.likes.has(track.id) ? "♥" : "♡";
   link.hidden = true;
   document.title = `${track.titulo} — Suno`;
+  paintFicha(isPaused);
+}
+
+function fichaEl() {
+  return document.querySelector("#ficha");
+}
+
+function openFicha() {
+  fichaEl().hidden = false;
+  paintFicha(state.usingEmbed ? false : audio.paused);
+}
+
+function closeFicha() {
+  fichaEl().hidden = true;
+}
+
+async function paintFicha(isPaused) {
+  const sheet = fichaEl();
+  if (!sheet || sheet.hidden) return;
+  const track = currentTrack();
+  if (!track) return;
+  document.querySelector("#ficha-cover").style.cssText = coverStyle(track);
+  document.querySelector("#ficha-bg").style.cssText = coverStyle(track);
+  document.querySelector("#ficha-title").textContent = track.titulo;
+  document.querySelector("#ficha-artist").textContent = track.etiquetas.join(" · ") || track.autor;
+  document.querySelector("#ficha-chips").innerHTML = track.etiquetas
+    .map((tag) => `<span class="chip">${escapeHtml(tag)}</span>`)
+    .join("");
+  document.querySelector("#ficha-play-icon").outerHTML = isPaused
+    ? PLAY.replace("<svg", '<svg id="ficha-play-icon"')
+    : PAUSE.replace("<svg", '<svg id="ficha-play-icon"');
+  document.querySelector("#ficha-total").textContent = formatTime(track.duracion_seg);
+  const lyricsBox = document.querySelector("#ficha-lyrics");
+  lyricsBox.setAttribute("contenteditable", "false");
+  if (lyricsBox.dataset.track === track.id) return;
+  lyricsBox.dataset.track = track.id;
+  lyricsBox.innerHTML = `<p class="muted">Cargando letra…</p>`;
+  const lyrics = await loadLyrics(track);
+  if (currentTrack()?.id !== track.id || sheet.hidden) return;
+  lyricsBox.innerHTML = formatLyrics(lyrics);
 }
 
 function audioUrl(track) {
@@ -295,8 +335,12 @@ function tickEmbedProgress() {
   const elapsed = Math.min(track.duracion_seg || 0, (Date.now() - state.embedStarted) / 1000);
   document.querySelector("#time-current").textContent = formatTime(elapsed);
   document.querySelector("#time-total").textContent = formatTime(track.duracion_seg);
+  document.querySelector("#ficha-current").textContent = formatTime(elapsed);
+  document.querySelector("#ficha-total").textContent = formatTime(track.duracion_seg);
   if (track.duracion_seg) {
-    document.querySelector("#seek").value = String(Math.floor((elapsed / track.duracion_seg) * 1000));
+    const value = String(Math.floor((elapsed / track.duracion_seg) * 1000));
+    document.querySelector("#seek").value = value;
+    document.querySelector("#ficha-seek").value = value;
   }
 }
 
@@ -393,6 +437,7 @@ function playTrack(track, queue) {
     playInPage(track);
   }
   remember(track);
+  openFicha();
   paintPlayer();
   render();
   renderPanel();
@@ -490,6 +535,21 @@ document.body.addEventListener("click", (event) => {
   }
 });
 
+document.querySelector("#now-cover").addEventListener("click", () => {
+  if (currentTrack()) openFicha();
+});
+document.querySelector("#now-title").addEventListener("click", () => {
+  if (currentTrack()) openFicha();
+});
+document.querySelector("#ficha-back").addEventListener("click", closeFicha);
+document.querySelector("#ficha-play").addEventListener("click", () => document.querySelector("#play").click());
+document.querySelector("#ficha-prev").addEventListener("click", () => document.querySelector("#prev").click());
+document.querySelector("#ficha-next").addEventListener("click", () => document.querySelector("#next").click());
+document.querySelector("#ficha-seek").addEventListener("input", (event) => {
+  document.querySelector("#seek").value = event.target.value;
+  document.querySelector("#seek").dispatchEvent(new Event("input"));
+});
+
 document.querySelector("#play").addEventListener("click", () => {
   if (!currentTrack()) {
     if (state.tracks[0]) playFromList(state.tracks[0].id, state.tracks);
@@ -573,9 +633,11 @@ audio.addEventListener("error", () => {
   const artist = document.querySelector("#now-artist");
   const track = currentTrack();
   if (!track) return;
-  artist.textContent = state.localApi
-    ? "No se pudo abrir el audio. Conectá Suno y tocá Actualizar."
-    : "En GitHub Pages el audio suena si el tema es nuevo o si abrís http://127.0.0.1:8765";
+  if (state.localApi) {
+    artist.textContent = "No se pudo abrir el audio local";
+    return;
+  }
+  playInPage(track);
 });
 
 document.addEventListener("keydown", (event) => {
@@ -607,6 +669,7 @@ async function probeLocalApi() {
       if (!response.ok) continue;
       const ping = await response.json();
       state.localApi = base;
+      document.body.classList.add("is-local");
       const extra = ping.nuevos ? ` · ${ping.nuevos} nuevos` : "";
       setSyncStatus(ping.tiene_sesion ? `Suno conectado${extra}` : "Reproductor local listo. Falta conectar Suno.");
       return ping;

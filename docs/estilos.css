@@ -39,7 +39,7 @@ a { color: inherit; }
   border-radius: 10px;
   min-height: 0;
 }
-.main { background: linear-gradient(#1f1f1f, #121212 280px); overflow: auto; }
+.main { background: linear-gradient(#1f1f1f, #121212 280px); overflow: auto; position: relative; }
 .sidebar { padding: 18px 12px; display: flex; flex-direction: column; overflow: auto; }
 .panel { background: #121212; display: flex; flex-direction: column; overflow: hidden; }
 .panel[hidden] { display: none !important; }
@@ -329,7 +329,10 @@ dialog textarea {
   overflow: hidden;
   z-index: 0;
 }
-.player { z-index: 5; }
+.player {
+  position: fixed;
+  left: 0; right: 0; bottom: 0;
+  height: 96px;
   background: var(--player);
   border-top: 1px solid #000;
   display: grid;
@@ -339,6 +342,77 @@ dialog textarea {
   gap: 12px;
   z-index: 5;
 }
+
+.ficha {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  overflow: auto;
+  background: #0d0d0d;
+  padding: 18px 28px 36px;
+}
+.ficha[hidden] { display: none !important; }
+.ficha-bg {
+  position: absolute;
+  inset: 0 0 auto;
+  height: 340px;
+  background: #1a1a1a center/cover no-repeat;
+  filter: blur(40px) saturate(1.2);
+  opacity: 0.45;
+  transform: scale(1.08);
+  pointer-events: none;
+}
+.ficha-top, .ficha-grid { position: relative; z-index: 1; }
+.ficha-top { display: flex; align-items: center; gap: 16px; margin-bottom: 18px; }
+.ficha-grid {
+  display: grid;
+  grid-template-columns: minmax(260px, 380px) 1fr;
+  gap: 36px;
+  align-items: start;
+}
+.ficha-cover {
+  width: min(100%, 340px);
+  aspect-ratio: 1;
+  border-radius: 12px;
+  background: #222 center/cover no-repeat;
+  box-shadow: 0 24px 60px rgba(0,0,0,.55);
+}
+.ficha-side h2 {
+  margin: 18px 0 6px;
+  font-size: 40px;
+  letter-spacing: -0.045em;
+  line-height: 1.05;
+}
+.ficha-artist { margin: 0; color: var(--muted); font-size: 16px; }
+.ficha-controls { display: flex; align-items: center; gap: 14px; margin: 18px 0 8px; }
+.play-xl { width: 58px; height: 58px; }
+.play-xl svg { width: 26px; height: 26px; }
+.ficha-seek { width: 100%; margin-top: 8px; }
+.ficha-lyrics-card {
+  background: rgba(0,0,0,.35);
+  border: 1px solid rgba(255,255,255,.06);
+  border-radius: 16px;
+  padding: 22px 26px 28px;
+  min-height: 420px;
+}
+.ficha-lyrics-card h3 {
+  margin: 0 0 14px;
+  font-size: 13px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.ficha .lyrics {
+  font-size: 20px;
+  line-height: 1.7;
+  color: #f2f2f2;
+  user-select: text;
+  cursor: default;
+  caret-color: transparent;
+  max-height: min(62vh, 640px);
+  overflow: auto;
+}
+.now { cursor: pointer; }
 .now, .extras, .transport-btns { display: flex; align-items: center; gap: 10px; }
 .now-cover { width: 58px; height: 58px; border-radius: 4px; background: #333; flex: none; }
 .now-meta { min-width: 0; }
@@ -383,4 +457,7 @@ input[type="range"]::-webkit-slider-thumb {
   .hero-cover { width: 120px; height: 120px; }
   .hero h1 { font-size: 32px; }
   .main { overflow: visible; }
+  .ficha-grid { grid-template-columns: 1fr; }
+  .ficha-side h2 { font-size: 30px; }
+  .ficha .lyrics { font-size: 17px; }
 }
