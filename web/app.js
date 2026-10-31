@@ -447,18 +447,10 @@ function evictEmbedPool(keepIds = new Set()) {
   }
 }
 
-function warmEmbed(trackId, { intent = false } = {}) {
+function warmEmbed(trackId) {
   if (!shouldUseEmbedPool() || !trackId) return;
-  const existing = state.embedPool.get(trackId);
-  if (existing) {
-    if (intent && !existing.intent) {
-      existing.intent = true;
-      existing.status = "loading";
-      existing.autoplayAt = Date.now();
-      existing.iframe.src = embedPlayUrl(trackId);
-    }
-    return;
-  }
+  if (state.embedPool.has(trackId)) return;
+  if (currentTrack()?.id === trackId && state.usingEmbed) return;
   evictEmbedPool(new Set([trackId]));
   const pool = embedPoolEl();
   if (!pool) return;
@@ -466,9 +458,9 @@ function warmEmbed(trackId, { intent = false } = {}) {
   iframe.className = "embed-engine embed-pool-frame";
   iframe.title = "Precarga";
   iframe.allow = "autoplay; encrypted-media; clipboard-write";
-  iframe.src = intent ? embedPlayUrl(trackId) : embedWarmUrl(trackId);
+  iframe.src = embedWarmUrl(trackId);
   pool.appendChild(iframe);
-  const entry = { iframe, status: "loading", intent, trackId, autoplayAt: intent ? Date.now() : 0 };
+  const entry = { iframe, status: "loading", trackId };
   state.embedPool.set(trackId, entry);
   iframe.addEventListener(
     "load",
@@ -522,15 +514,34 @@ function attachMainEmbed(iframe) {
   document.body.appendChild(iframe);
 }
 
-function stopEmbed() {
+function clearEmbedPool() {
+  for (const [, entry] of state.embedPool) {
+    entry.iframe.removeAttribute("src");
+    entry.iframe.remove();
+  }
+  state.embedPool.clear();
+}
+
+function stopAllPlayback() {
   window.clearTimeout(state.embedTimer);
   window.clearInterval(state.embedTick);
+  audio.pause();
+  audio.removeAttribute("src");
   state.usingEmbed = false;
   state.embedStarted = 0;
   state.audioLeadSec = 0;
+  state.karaokeActive = -1;
   const frame = embedFrame();
-  if (!frame) return;
-  frame.removeAttribute("src");
+  if (frame) frame.removeAttribute("src");
+  clearEmbedPool();
+  document.querySelectorAll("#ficha-lyrics .karaoke-line, #panel-body .karaoke-line").forEach((node) => {
+    node.classList.remove("is-past", "is-active", "is-next");
+    node.querySelector(".karaoke-fill")?.style.setProperty("--fill", "0");
+  });
+}
+
+function stopEmbed() {
+  stopAllPlayback();
 }
 
 function tickEmbedProgress() {
@@ -566,29 +577,12 @@ function startEmbedClock(autoplayAt) {
 }
 
 function playInPage(track) {
-  audio.pause();
-  audio.removeAttribute("src");
   state.usingEmbed = true;
   prefetchClipMedia(track.id);
-
-  const pooled = state.embedPool.get(track.id);
-  let frame = embedFrame();
-  if (pooled?.intent && pooled.autoplayAt) {
-    state.embedPool.delete(track.id);
-    attachMainEmbed(pooled.iframe);
-    startEmbedClock(pooled.autoplayAt);
-  } else if (pooled) {
-    state.embedPool.delete(track.id);
-    attachMainEmbed(pooled.iframe);
-    pooled.iframe.src = embedPlayUrl(track.id);
-    startEmbedClock(Date.now());
-  } else {
-    attachMainEmbed(frame);
-    const alreadyPlaying = frame.src?.includes(track.id) && frame.src.includes("autoplay=1");
-    if (!alreadyPlaying) frame.src = embedPlayUrl(track.id);
-    startEmbedClock(alreadyPlaying ? state.embedStarted || Date.now() : Date.now());
-  }
-
+  const frame = embedFrame();
+  if (!frame) return;
+  frame.src = embedPlayUrl(track.id);
+  startEmbedClock(Date.now());
   startEmbedTimers(track);
   scheduleWarmVisible();
 }
@@ -775,9 +769,11 @@ function playTrack(track, queue) {
     state.index = state.queue.findIndex((item) => item.id === track.id);
   }
   if (state.index < 0) return;
+  stopAllPlayback();
+  const lyricsBox = document.querySelector("#ficha-lyrics");
+  if (lyricsBox) lyricsBox.removeAttribute("data-track");
   const source = state.localApi ? audioUrl(track) : "";
   if (source) {
-    stopEmbed();
     audio.src = source;
     audio.play().catch(() => playInPage(track));
   } else {
@@ -796,7 +792,7 @@ function playFromList(trackId, list) {
   if (!track) return;
   if (currentTrack()?.id === trackId) {
     if (state.usingEmbed) {
-      stopEmbed();
+      stopAllPlayback();
       paintPlayer();
       return;
     }
@@ -819,7 +815,7 @@ function step(direction) {
   if (next >= state.queue.length) {
     if (state.repeat !== "all" && direction > 0) {
       audio.pause();
-      stopEmbed();
+      stopAllPlayback();
       paintPlayer();
       return;
     }
@@ -836,7 +832,7 @@ viewEl.addEventListener("mouseover", (event) => {
   const trackId = playFab?.dataset.play || row?.dataset.id;
   if (!trackId) return;
   window.clearTimeout(state.hoverWarmTimer);
-  state.hoverWarmTimer = window.setTimeout(() => warmEmbed(trackId, { intent: true }), 60);
+  state.hoverWarmTimer = window.setTimeout(() => warmEmbed(trackId), 120);
 });
 
 searchInput.addEventListener("input", () => {
@@ -919,7 +915,7 @@ document.querySelector("#play").addEventListener("click", () => {
     return;
   }
   if (state.usingEmbed) {
-    stopEmbed();
+    stopAllPlayback();
     paintPlayer();
     return;
   }
