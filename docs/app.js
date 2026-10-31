@@ -22,9 +22,16 @@ const state = {
   lyrics: new Map(),
   karaokeTimelines: new Map(),
   karaokeMeta: new Map(),
+  karaokeDomCache: new Map(),
+  karaokeOffsetsByTrack: (() => {
+    try {
+      return JSON.parse(localStorage.getItem("suno-karaoke-offsets") || "{}");
+    } catch {
+      return {};
+    }
+  })(),
   karaokeActive: -1,
   audioLeadSec: 0,
-  karaokeOffset: Number(localStorage.getItem("suno-karaoke-offset") || 0) || 0,
   seeking: false,
   localApi: "",
   nuevos: [],
@@ -394,14 +401,9 @@ async function paintFicha(isPaused) {
   document.querySelector("#ficha-total").textContent = formatTime(track.duracion_seg);
   paintLikeButtons(track);
   const lyricsBox = document.querySelector("#ficha-lyrics");
-  lyricsBox.setAttribute("contenteditable", "false");
-  if (lyricsBox.dataset.track !== track.id) {
-    lyricsBox.dataset.track = track.id;
-    lyricsBox.innerHTML = `<p class="muted">Cargando letra…</p>`;
-    const lyrics = await loadLyrics(track);
-    if (currentTrack()?.id !== track.id || sheet.hidden) return;
-    mountKaraoke(track, lyrics, lyricsBox);
-  }
+  paintKaraokeOffset();
+  await ensureKaraokeMounted(track, lyricsBox);
+  if (currentTrack()?.id !== track.id || sheet.hidden) return;
   updateKaraokeHighlight(playbackElapsed());
 }
 
@@ -448,10 +450,22 @@ function evictEmbedPool(keepIds = new Set()) {
   }
 }
 
+function warmQueueNeighbors() {
+  if (!shouldUseEmbedPool()) return;
+  const warmIds = new Set();
+  for (const offset of [-2, -1, 1, 2]) {
+    const neighbor = state.queue[state.index + offset];
+    if (neighbor) warmIds.add(neighbor.id);
+  }
+  for (const id of state.recent.slice(0, 4)) warmIds.add(id);
+  const playingId = currentTrack()?.id;
+  if (playingId) warmIds.delete(playingId);
+  warmIds.forEach((trackId) => warmEmbed(trackId));
+}
+
 function warmEmbed(trackId) {
   if (!shouldUseEmbedPool() || !trackId) return;
   if (state.embedPool.has(trackId)) return;
-  if (currentTrack()?.id === trackId && state.usingEmbed) return;
   evictEmbedPool(new Set([trackId]));
   const pool = embedPoolEl();
   if (!pool) return;
@@ -523,7 +537,14 @@ function clearEmbedPool() {
   state.embedPool.clear();
 }
 
-function stopAllPlayback() {
+function resetKaraokeVisuals() {
+  document.querySelectorAll("#ficha-lyrics .karaoke-line, #panel-body .karaoke-line").forEach((node) => {
+    node.classList.remove("is-past", "is-active", "is-next");
+    node.querySelector(".karaoke-fill")?.style.setProperty("--fill", "0");
+  });
+}
+
+function stopCurrentTrack() {
   window.clearTimeout(state.embedTimer);
   window.clearInterval(state.embedTick);
   audio.pause();
@@ -534,11 +555,12 @@ function stopAllPlayback() {
   state.karaokeActive = -1;
   const frame = embedFrame();
   if (frame) frame.removeAttribute("src");
+  resetKaraokeVisuals();
+}
+
+function stopAllPlayback() {
+  stopCurrentTrack();
   clearEmbedPool();
-  document.querySelectorAll("#ficha-lyrics .karaoke-line, #panel-body .karaoke-line").forEach((node) => {
-    node.classList.remove("is-past", "is-active", "is-next");
-    node.querySelector(".karaoke-fill")?.style.setProperty("--fill", "0");
-  });
 }
 
 function stopEmbed() {
@@ -582,11 +604,19 @@ function startEmbedClock(autoplayAt) {
 function playInPage(track) {
   state.usingEmbed = true;
   prefetchClipMedia(track.id);
-  const frame = embedFrame();
-  if (!frame) return;
-  frame.src = embedPlayUrl(track.id);
+  const pooled = state.embedPool.get(track.id);
+  if (pooled?.iframe) {
+    state.embedPool.delete(track.id);
+    attachMainEmbed(pooled.iframe);
+    pooled.iframe.src = embedPlayUrl(track.id);
+  } else {
+    const frame = embedFrame();
+    if (!frame) return;
+    frame.src = embedPlayUrl(track.id);
+  }
   startEmbedClock(Date.now());
   startEmbedTimers(track);
+  warmQueueNeighbors();
   scheduleWarmVisible();
 }
 
@@ -665,30 +695,91 @@ function mountKaraoke(track, lyrics, target) {
   const timeline = karaokeTimelineForTrack(track, lyrics);
   state.karaokeTimelines.set(track.id, timeline);
   state.karaokeActive = -1;
-  target.innerHTML = renderKaraokeDom(timeline);
+  const html = renderKaraokeDom(timeline);
+  target.innerHTML = html;
+  state.karaokeDomCache.set(track.id, html);
   const first = timeline.find((item) => item.kind === "line");
   updateKaraokeNow(first?.text || "La letra aparece acá cuando arranca el tema", true);
 }
 
+function karaokeOffsetFor(trackId) {
+  if (!trackId) return 0;
+  return Number(state.karaokeOffsetsByTrack[trackId]) || 0;
+}
+
+function saveKaraokeOffsets() {
+  localStorage.setItem("suno-karaoke-offsets", JSON.stringify(state.karaokeOffsetsByTrack));
+}
+
 function playbackElapsed() {
   const track = currentTrack();
+  const offset = karaokeOffsetFor(track?.id);
   if (state.usingEmbed && state.embedStarted) {
-    const raw = (Date.now() - state.embedStarted) / 1000 - state.audioLeadSec + state.karaokeOffset;
+    const raw = (Date.now() - state.embedStarted) / 1000 - state.audioLeadSec + offset;
     return Math.min(track?.duracion_seg || 0, Math.max(0, raw));
   }
-  return Math.max(0, (audio.currentTime || 0) + state.karaokeOffset);
+  return Math.max(0, (audio.currentTime || 0) + offset);
 }
 
 function paintKaraokeOffset() {
+  const track = currentTrack();
+  const offset = karaokeOffsetFor(track?.id);
   const label = document.querySelector("#karaoke-offset");
-  if (label) label.textContent = `${state.karaokeOffset > 0 ? "+" : ""}${state.karaokeOffset.toFixed(1)}s`;
+  if (label) label.textContent = `${offset > 0 ? "+" : ""}${offset.toFixed(1)}s`;
 }
 
 function nudgeKaraoke(delta) {
-  state.karaokeOffset = Math.max(-8, Math.min(8, Math.round((state.karaokeOffset + delta) * 10) / 10));
-  localStorage.setItem("suno-karaoke-offset", String(state.karaokeOffset));
+  const track = currentTrack();
+  if (!track) return;
+  const limit = Math.max(Number(track.duracion_seg) || 0, 60);
+  const next = Math.round((karaokeOffsetFor(track.id) + delta) * 10) / 10;
+  state.karaokeOffsetsByTrack[track.id] = Math.max(-limit, Math.min(limit, next));
+  saveKaraokeOffsets();
   paintKaraokeOffset();
   updateKaraokeHighlight(playbackElapsed());
+}
+
+async function ensureKaraokeMounted(track, target) {
+  if (!track || !target) return;
+  target.setAttribute("contenteditable", "false");
+  if (target.dataset.track === track.id && state.karaokeTimelines.has(track.id)) {
+    updateKaraokeHighlight(playbackElapsed());
+    return;
+  }
+  const cachedHtml = state.karaokeDomCache.get(track.id);
+  if (cachedHtml) {
+    target.dataset.track = track.id;
+    target.innerHTML = cachedHtml;
+    if (!state.karaokeTimelines.has(track.id)) {
+      const lyrics = track.letra || state.lyrics.get(track.id) || "";
+      state.karaokeTimelines.set(track.id, karaokeTimelineForTrack(track, lyrics));
+    }
+    state.karaokeActive = -1;
+    updateKaraokeHighlight(playbackElapsed());
+    return;
+  }
+  target.dataset.track = track.id;
+  target.innerHTML = `<p class="muted">Cargando letra…</p>`;
+  const lyrics = await loadLyrics(track);
+  if (currentTrack()?.id !== track.id) return;
+  mountKaraoke(track, lyrics, target);
+}
+
+function restartCurrentTrack() {
+  const track = currentTrack();
+  if (!track) return;
+  if (state.usingEmbed) {
+    startEmbedClock(Date.now());
+    startEmbedTimers(track);
+  } else {
+    audio.currentTime = 0;
+    audio.play().catch(() => {});
+  }
+  state.karaokeActive = -1;
+  resetKaraokeVisuals();
+  updateKaraokeHighlight(0);
+  paintPlayer();
+  paintFicha(isPlaybackPaused());
 }
 
 function updateKaraokeNow(text, waiting) {
@@ -790,15 +881,14 @@ function shuffled(list) {
   return copy;
 }
 
-function playTrack(track, queue) {
+function playTrack(track, queue, options = {}) {
+  const light = options.light === true;
   if (queue) {
     state.queue = state.shuffle ? [track, ...shuffled(queue.filter((item) => item.id !== track.id))] : [...queue];
     state.index = state.queue.findIndex((item) => item.id === track.id);
   }
   if (state.index < 0) return;
-  stopAllPlayback();
-  const lyricsBox = document.querySelector("#ficha-lyrics");
-  if (lyricsBox) lyricsBox.removeAttribute("data-track");
+  stopCurrentTrack();
   const source = state.localApi ? audioUrl(track) : "";
   if (source) {
     audio.src = source;
@@ -810,8 +900,13 @@ function playTrack(track, queue) {
   remember(track);
   openFicha();
   paintPlayer();
-  render();
-  renderPanel();
+  if (light) {
+    paintFicha(isPlaybackPaused());
+    if (!panel.hidden) renderPanel();
+  } else {
+    render();
+    renderPanel();
+  }
 }
 
 function playFromList(trackId, list) {
@@ -831,17 +926,15 @@ function playFromList(trackId, list) {
   playTrack(track, queue);
 }
 
-function step(direction) {
+function step(direction, options = {}) {
   if (!state.queue.length) return;
   if (direction > 0 && state.repeat === "one") {
-    audio.currentTime = 0;
-    audio.play();
+    restartCurrentTrack();
     return;
   }
   let next = state.index + direction;
   if (next >= state.queue.length) {
     if (state.repeat !== "all" && direction > 0) {
-      audio.pause();
       stopAllPlayback();
       paintPlayer();
       return;
@@ -850,7 +943,7 @@ function step(direction) {
   }
   if (next < 0) next = 0;
   state.index = next;
-  playTrack(state.queue[state.index]);
+  playTrack(state.queue[state.index], null, { light: true, ...options });
 }
 
 viewEl.addEventListener("mouseover", (event) => {
@@ -917,7 +1010,7 @@ document.body.addEventListener("click", (event) => {
   const queueItem = event.target.closest("[data-queue]");
   if (queueItem) {
     state.index = Number(queueItem.dataset.queue);
-    playTrack(state.queue[state.index]);
+    playTrack(state.queue[state.index], null, { light: true });
   }
 });
 
@@ -951,8 +1044,8 @@ document.querySelector("#play").addEventListener("click", () => {
 });
 document.querySelector("#next").addEventListener("click", () => step(1));
 document.querySelector("#prev").addEventListener("click", () => {
-  if (audio.currentTime > 3) {
-    audio.currentTime = 0;
+  if (playbackElapsed() > 3) {
+    restartCurrentTrack();
     return;
   }
   step(-1);
