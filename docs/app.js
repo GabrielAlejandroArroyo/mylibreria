@@ -24,6 +24,8 @@ const state = {
   localApi: "",
   nuevos: [],
   syncing: false,
+  embedTimer: 0,
+  usingEmbed: false,
 };
 
 const PLAY = `<svg viewBox="0 0 24 24"><path d="M8 5v14l12-7z"/></svg>`;
@@ -243,7 +245,8 @@ function paintPlayer() {
   const cover = document.querySelector("#now-cover");
   const like = document.querySelector("#like-btn");
   const link = document.querySelector("#suno-link");
-  document.querySelector("#play-icon").outerHTML = audio.paused ? PLAY.replace("<svg", '<svg id="play-icon"') : PAUSE.replace("<svg", '<svg id="play-icon"');
+  const isPaused = state.usingEmbed ? false : audio.paused;
+  document.querySelector("#play-icon").outerHTML = isPaused ? PLAY.replace("<svg", '<svg id="play-icon"') : PAUSE.replace("<svg", '<svg id="play-icon"');
   document.querySelector("#shuffle").classList.toggle("is-on", state.shuffle);
   document.querySelector("#repeat").classList.toggle("is-on", state.repeat !== "off");
   document.querySelector("#repeat").dataset.mode = state.repeat;
@@ -260,8 +263,7 @@ function paintPlayer() {
   cover.style.cssText = coverStyle(track);
   like.classList.toggle("is-on", state.likes.has(track.id));
   like.textContent = state.likes.has(track.id) ? "♥" : "♡";
-  link.hidden = !track.url_suno;
-  link.href = track.url_suno || "#";
+  link.hidden = true;
   document.title = `${track.titulo} — Suno`;
 }
 
@@ -269,6 +271,36 @@ function audioUrl(track) {
   if (state.localApi) return `${state.localApi}/api/audio/${track.id}`;
   if (track.audio_web) return track.audio_web;
   return "";
+}
+
+function embedFrame() {
+  return document.querySelector("#embed-player");
+}
+
+function stopEmbed() {
+  window.clearTimeout(state.embedTimer);
+  state.usingEmbed = false;
+  const frame = embedFrame();
+  if (!frame) return;
+  frame.hidden = true;
+  frame.removeAttribute("src");
+  document.querySelector(".player").classList.remove("has-embed");
+  document.body.classList.remove("has-embed");
+}
+
+function playInPage(track) {
+  audio.pause();
+  audio.removeAttribute("src");
+  state.usingEmbed = true;
+  const frame = embedFrame();
+  frame.hidden = false;
+  document.querySelector(".player").classList.add("has-embed");
+  document.body.classList.add("has-embed");
+  frame.src = `https://suno.com/embed/${track.id}?auto_play=true`;
+  window.clearTimeout(state.embedTimer);
+  if (track.duracion_seg > 0) {
+    state.embedTimer = window.setTimeout(() => step(1), Math.max(1000, track.duracion_seg * 1000));
+  }
 }
 
 async function loadLyrics(track) {
@@ -341,11 +373,14 @@ function playTrack(track, queue) {
   if (state.index < 0) return;
   const source = audioUrl(track);
   if (!source) {
+    playInPage(track);
+    remember(track);
     paintPlayer();
-    document.querySelector("#now-artist").textContent = "Abrí el reproductor local para escuchar";
-    if (track.url_suno) window.open(track.url_suno, "_blank", "noreferrer");
+    render();
+    renderPanel();
     return;
   }
+  stopEmbed();
   audio.src = source;
   audio.play().catch(() => {});
   remember(track);
@@ -358,6 +393,11 @@ function playFromList(trackId, list) {
   const track = list.find((item) => item.id === trackId) || byId(trackId);
   if (!track) return;
   if (currentTrack()?.id === trackId) {
+    if (state.usingEmbed) {
+      stopEmbed();
+      paintPlayer();
+      return;
+    }
     if (audio.paused) audio.play();
     else audio.pause();
     return;
@@ -377,6 +417,7 @@ function step(direction) {
   if (next >= state.queue.length) {
     if (state.repeat !== "all" && direction > 0) {
       audio.pause();
+      stopEmbed();
       paintPlayer();
       return;
     }
@@ -443,6 +484,11 @@ document.body.addEventListener("click", (event) => {
 document.querySelector("#play").addEventListener("click", () => {
   if (!currentTrack()) {
     if (state.tracks[0]) playFromList(state.tracks[0].id, state.tracks);
+    return;
+  }
+  if (state.usingEmbed) {
+    stopEmbed();
+    paintPlayer();
     return;
   }
   if (audio.paused) audio.play();
