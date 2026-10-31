@@ -446,10 +446,37 @@ dialog textarea {
 }
 .ficha-lyrics-card h3,
 .ficha-karaoke-pane h3 {
-  margin: 0 0 6px;
+  margin: 0;
   font-size: 13px;
   letter-spacing: 0.12em;
   text-transform: uppercase;
+  color: var(--muted);
+}
+.karaoke-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+.karaoke-sync {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.karaoke-sync button {
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 50%;
+  background: #2a2a2a;
+  color: #fff;
+  font-weight: 800;
+}
+.karaoke-sync span {
+  min-width: 42px;
+  text-align: center;
+  font-size: 12px;
   color: var(--muted);
 }
 .karaoke-now {

@@ -94,7 +94,14 @@
             </div>
           </div>
           <article class="ficha-lyrics-card ficha-karaoke-pane">
-            <h3>Karaoke</h3>
+            <div class="karaoke-head">
+              <h3>Karaoke</h3>
+              <div class="karaoke-sync">
+                <button type="button" id="karaoke-late" aria-label="Atrasar letra">−</button>
+                <span id="karaoke-offset">0.0s</span>
+                <button type="button" id="karaoke-early" aria-label="Adelantar letra">+</button>
+              </div>
+            </div>
             <p id="ficha-karaoke-now" class="karaoke-now">La letra aparece acá cuando arranca el tema</p>
             <div id="ficha-lyrics" class="lyrics karaoke" spellcheck="false"></div>
           </article>

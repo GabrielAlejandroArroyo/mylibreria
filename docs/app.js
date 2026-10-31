@@ -23,6 +23,7 @@ const state = {
   karaokeTimelines: new Map(),
   karaokeActive: -1,
   audioLeadSec: 0,
+  karaokeOffset: Number(localStorage.getItem("suno-karaoke-offset") || 0) || 0,
   seeking: false,
   localApi: "",
   nuevos: [],
@@ -37,6 +38,7 @@ const state = {
 };
 
 const EMBED_POOL_MAX = 6;
+const SUNO_AUTOPLAY_LEAD = 1.15;
 const CLOUDFRONT_CLIP = (id) => `https://d2lwuy8qc234o3.cloudfront.net/1/clip/${encodeURIComponent(id)}.m4a`;
 
 const PLAY = `<svg viewBox="0 0 24 24"><path d="M8 5v14l12-7z"/></svg>`;
@@ -452,6 +454,7 @@ function warmEmbed(trackId, { intent = false } = {}) {
     if (intent && !existing.intent) {
       existing.intent = true;
       existing.status = "loading";
+      existing.autoplayAt = Date.now();
       existing.iframe.src = embedPlayUrl(trackId);
     }
     return;
@@ -465,7 +468,7 @@ function warmEmbed(trackId, { intent = false } = {}) {
   iframe.allow = "autoplay; encrypted-media; clipboard-write";
   iframe.src = intent ? embedPlayUrl(trackId) : embedWarmUrl(trackId);
   pool.appendChild(iframe);
-  const entry = { iframe, status: "loading", intent, trackId };
+  const entry = { iframe, status: "loading", intent, trackId, autoplayAt: intent ? Date.now() : 0 };
   state.embedPool.set(trackId, entry);
   iframe.addEventListener(
     "load",
@@ -557,30 +560,33 @@ function startEmbedTimers(track) {
   }
 }
 
+function startEmbedClock(autoplayAt) {
+  state.audioLeadSec = SUNO_AUTOPLAY_LEAD;
+  state.embedStarted = autoplayAt || Date.now();
+}
+
 function playInPage(track) {
   audio.pause();
   audio.removeAttribute("src");
   state.usingEmbed = true;
-  state.embedStarted = Date.now();
   prefetchClipMedia(track.id);
 
   const pooled = state.embedPool.get(track.id);
   let frame = embedFrame();
-  if (pooled?.status === "ready") {
+  if (pooled?.intent && pooled.autoplayAt) {
     state.embedPool.delete(track.id);
     attachMainEmbed(pooled.iframe);
-    frame = pooled.iframe;
-    state.audioLeadSec = pooled.intent ? 0.7 : 1.6;
-    if (!pooled.intent) frame.src = embedPlayUrl(track.id);
+    startEmbedClock(pooled.autoplayAt);
+  } else if (pooled) {
+    state.embedPool.delete(track.id);
+    attachMainEmbed(pooled.iframe);
+    pooled.iframe.src = embedPlayUrl(track.id);
+    startEmbedClock(Date.now());
   } else {
     attachMainEmbed(frame);
-    const url = embedPlayUrl(track.id);
-    if (!frame.src?.includes(track.id) || !frame.src.includes("autoplay=1")) {
-      state.audioLeadSec = 1.8;
-      frame.src = url;
-    } else {
-      state.audioLeadSec = 0.7;
-    }
+    const alreadyPlaying = frame.src?.includes(track.id) && frame.src.includes("autoplay=1");
+    if (!alreadyPlaying) frame.src = embedPlayUrl(track.id);
+    startEmbedClock(alreadyPlaying ? state.embedStarted || Date.now() : Date.now());
   }
 
   startEmbedTimers(track);
@@ -607,9 +613,9 @@ function parseLyricLines(text) {
 
 function buildLineTimeline(items, durationSec) {
   const duration = Math.max(Number(durationSec) || 0, 1);
-  const intro = Math.min(14, Math.max(7, duration * 0.11));
-  const outro = Math.min(10, Math.max(4, duration * 0.07));
-  const singableWindow = Math.max(duration - intro - outro, duration * 0.7);
+  const intro = Math.min(9, Math.max(6, duration * 0.05));
+  const outro = Math.min(8, Math.max(5, duration * 0.045));
+  const singableWindow = Math.max(duration - intro - outro, duration * 0.72);
   const weights = items.map((item) => (item.kind === "line" ? Math.max(item.text.length, 10) : 0));
   const totalWeight = weights.reduce((sum, value) => sum + value, 0) || 1;
   let cursor = intro;
@@ -648,10 +654,22 @@ function mountKaraoke(track, lyrics, target) {
 function playbackElapsed() {
   const track = currentTrack();
   if (state.usingEmbed && state.embedStarted) {
-    const raw = (Date.now() - state.embedStarted) / 1000 - state.audioLeadSec;
+    const raw = (Date.now() - state.embedStarted) / 1000 - state.audioLeadSec + state.karaokeOffset;
     return Math.min(track?.duracion_seg || 0, Math.max(0, raw));
   }
-  return audio.currentTime || 0;
+  return Math.max(0, (audio.currentTime || 0) + state.karaokeOffset);
+}
+
+function paintKaraokeOffset() {
+  const label = document.querySelector("#karaoke-offset");
+  if (label) label.textContent = `${state.karaokeOffset > 0 ? "+" : ""}${state.karaokeOffset.toFixed(1)}s`;
+}
+
+function nudgeKaraoke(delta) {
+  state.karaokeOffset = Math.max(-8, Math.min(8, Math.round((state.karaokeOffset + delta) * 10) / 10));
+  localStorage.setItem("suno-karaoke-offset", String(state.karaokeOffset));
+  paintKaraokeOffset();
+  updateKaraokeHighlight(playbackElapsed());
 }
 
 function updateKaraokeNow(text, waiting) {
@@ -939,6 +957,8 @@ document.querySelector("#ficha-like").addEventListener("click", () => {
   const track = currentTrack();
   if (track) toggleLike(track.id);
 });
+document.querySelector("#karaoke-late").addEventListener("click", () => nudgeKaraoke(-0.5));
+document.querySelector("#karaoke-early").addEventListener("click", () => nudgeKaraoke(0.5));
 document.querySelector("#lyrics-btn").addEventListener("click", () => {
   if (!panel.hidden && state.tab === "letra") closePanel();
   else openPanel("letra");
@@ -1094,6 +1114,7 @@ document.querySelector("#sync-btn").addEventListener("click", async () => {
 });
 
 async function boot() {
+  paintKaraokeOffset();
   const savedVolume = Number(localStorage.getItem("suno-volume"));
   if (Number.isFinite(savedVolume)) {
     audio.volume = savedVolume;
