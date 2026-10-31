@@ -319,14 +319,15 @@ dialog textarea {
 
 .embed-engine {
   position: fixed;
-  left: 0;
-  bottom: 0;
-  width: 280px;
-  height: 80px;
-  opacity: 0.02;
+  left: -40px;
+  bottom: -40px;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
   pointer-events: none;
   border: 0;
-  z-index: 1;
+  overflow: hidden;
+  z-index: 0;
 }
 .player { z-index: 5; }
   background: var(--player);
