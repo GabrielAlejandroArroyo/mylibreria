@@ -25,6 +25,8 @@ const state = {
   nuevos: [],
   syncing: false,
   embedTimer: 0,
+  embedTick: 0,
+  embedStarted: 0,
   usingEmbed: false,
 };
 
@@ -279,25 +281,36 @@ function embedFrame() {
 
 function stopEmbed() {
   window.clearTimeout(state.embedTimer);
+  window.clearInterval(state.embedTick);
   state.usingEmbed = false;
+  state.embedStarted = 0;
   const frame = embedFrame();
   if (!frame) return;
-  frame.hidden = true;
   frame.removeAttribute("src");
-  document.querySelector(".player").classList.remove("has-embed");
-  document.body.classList.remove("has-embed");
+}
+
+function tickEmbedProgress() {
+  const track = currentTrack();
+  if (!state.usingEmbed || !track || !state.embedStarted) return;
+  const elapsed = Math.min(track.duracion_seg || 0, (Date.now() - state.embedStarted) / 1000);
+  document.querySelector("#time-current").textContent = formatTime(elapsed);
+  document.querySelector("#time-total").textContent = formatTime(track.duracion_seg);
+  if (track.duracion_seg) {
+    document.querySelector("#seek").value = String(Math.floor((elapsed / track.duracion_seg) * 1000));
+  }
 }
 
 function playInPage(track) {
   audio.pause();
   audio.removeAttribute("src");
   state.usingEmbed = true;
+  state.embedStarted = Date.now();
   const frame = embedFrame();
-  frame.hidden = false;
-  document.querySelector(".player").classList.add("has-embed");
-  document.body.classList.add("has-embed");
-  frame.src = `https://suno.com/embed/${track.id}?auto_play=true`;
+  frame.src = `https://suno.com/embed/${encodeURIComponent(track.id)}?auto_play=true&autoplay=1`;
   window.clearTimeout(state.embedTimer);
+  window.clearInterval(state.embedTick);
+  state.embedTick = window.setInterval(tickEmbedProgress, 400);
+  tickEmbedProgress();
   if (track.duracion_seg > 0) {
     state.embedTimer = window.setTimeout(() => step(1), Math.max(1000, track.duracion_seg * 1000));
   }
@@ -371,18 +384,14 @@ function playTrack(track, queue) {
     state.index = state.queue.findIndex((item) => item.id === track.id);
   }
   if (state.index < 0) return;
-  const source = audioUrl(track);
-  if (!source) {
+  const source = state.localApi ? audioUrl(track) : "";
+  if (source) {
+    stopEmbed();
+    audio.src = source;
+    audio.play().catch(() => playInPage(track));
+  } else {
     playInPage(track);
-    remember(track);
-    paintPlayer();
-    render();
-    renderPanel();
-    return;
   }
-  stopEmbed();
-  audio.src = source;
-  audio.play().catch(() => {});
   remember(track);
   paintPlayer();
   render();

@@ -123,12 +123,13 @@ a { color: inherit; }
 }
 .search-wrap:focus-within { outline: 1px solid #fff; color: #fff; }
 .sync-bar {
-  display: flex;
+  display: none;
   gap: 10px;
   align-items: center;
   flex-wrap: wrap;
   margin: 0 0 12px;
 }
+body.is-local .sync-bar { display: flex; }
 .sync-bar span { color: var(--muted); font-size: 13px; }
 .badge-new {
   display: inline-block;
@@ -316,20 +317,18 @@ dialog textarea {
 .queue-item:hover, .queue-item.is-current { background: #282828; }
 .queue-item.is-current strong { color: var(--green); }
 
-#embed-player {
+.embed-engine {
   position: fixed;
-  left: 12px;
-  right: 12px;
-  bottom: 100px;
-  height: 155px;
+  left: 0;
+  bottom: 0;
+  width: 280px;
+  height: 80px;
+  opacity: 0.02;
+  pointer-events: none;
   border: 0;
-  border-radius: 10px;
-  z-index: 6;
-  background: #000;
-  box-shadow: 0 8px 24px rgba(0,0,0,.45);
+  z-index: 1;
 }
-.player.has-embed { height: 96px; }
-body.has-embed { padding-bottom: 196px; }
+.player { z-index: 5; }
   background: var(--player);
   border-top: 1px solid #000;
   display: grid;
