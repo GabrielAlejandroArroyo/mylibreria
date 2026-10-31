@@ -22,6 +22,7 @@ const state = {
   lyrics: new Map(),
   karaokeTimelines: new Map(),
   karaokeActive: -1,
+  audioLeadSec: 0,
   seeking: false,
   localApi: "",
   nuevos: [],
@@ -523,6 +524,7 @@ function stopEmbed() {
   window.clearInterval(state.embedTick);
   state.usingEmbed = false;
   state.embedStarted = 0;
+  state.audioLeadSec = 0;
   const frame = embedFrame();
   if (!frame) return;
   frame.removeAttribute("src");
@@ -531,7 +533,7 @@ function stopEmbed() {
 function tickEmbedProgress() {
   const track = currentTrack();
   if (!state.usingEmbed || !track || !state.embedStarted) return;
-  const elapsed = Math.min(track.duracion_seg || 0, (Date.now() - state.embedStarted) / 1000);
+  const elapsed = playbackElapsed();
   document.querySelector("#time-current").textContent = formatTime(elapsed);
   document.querySelector("#time-total").textContent = formatTime(track.duracion_seg);
   document.querySelector("#ficha-current").textContent = formatTime(elapsed);
@@ -547,10 +549,11 @@ function tickEmbedProgress() {
 function startEmbedTimers(track) {
   window.clearTimeout(state.embedTimer);
   window.clearInterval(state.embedTick);
-  state.embedTick = window.setInterval(tickEmbedProgress, 400);
+  state.embedTick = window.setInterval(tickEmbedProgress, 200);
   tickEmbedProgress();
   if (track.duracion_seg > 0) {
-    state.embedTimer = window.setTimeout(() => step(1), Math.max(1000, track.duracion_seg * 1000));
+    const waitMs = Math.max(1000, (track.duracion_seg + state.audioLeadSec) * 1000);
+    state.embedTimer = window.setTimeout(() => step(1), waitMs);
   }
 }
 
@@ -567,11 +570,17 @@ function playInPage(track) {
     state.embedPool.delete(track.id);
     attachMainEmbed(pooled.iframe);
     frame = pooled.iframe;
+    state.audioLeadSec = pooled.intent ? 0.7 : 1.6;
     if (!pooled.intent) frame.src = embedPlayUrl(track.id);
   } else {
     attachMainEmbed(frame);
     const url = embedPlayUrl(track.id);
-    if (!frame.src?.includes(track.id) || !frame.src.includes("autoplay=1")) frame.src = url;
+    if (!frame.src?.includes(track.id) || !frame.src.includes("autoplay=1")) {
+      state.audioLeadSec = 1.8;
+      frame.src = url;
+    } else {
+      state.audioLeadSec = 0.7;
+    }
   }
 
   startEmbedTimers(track);
@@ -598,13 +607,16 @@ function parseLyricLines(text) {
 
 function buildLineTimeline(items, durationSec) {
   const duration = Math.max(Number(durationSec) || 0, 1);
-  const weights = items.map((item) => (item.kind === "line" ? Math.max(item.text.length, 8) : 0));
+  const intro = Math.min(14, Math.max(7, duration * 0.11));
+  const outro = Math.min(10, Math.max(4, duration * 0.07));
+  const singableWindow = Math.max(duration - intro - outro, duration * 0.7);
+  const weights = items.map((item) => (item.kind === "line" ? Math.max(item.text.length, 10) : 0));
   const totalWeight = weights.reduce((sum, value) => sum + value, 0) || 1;
-  let cursor = 0;
+  let cursor = intro;
   let lineIndex = 0;
   return items.map((item, index) => {
     if (item.kind !== "line") return { ...item, startSec: 0, endSec: 0, lineIndex: -1 };
-    const span = (weights[index] / totalWeight) * duration;
+    const span = (weights[index] / totalWeight) * singableWindow;
     const startSec = cursor;
     cursor += span;
     const current = lineIndex;
@@ -619,7 +631,7 @@ function renderKaraokeDom(items) {
     .map((item) => (
       item.kind === "section"
         ? `<p class="karaoke-section">${escapeHtml(item.text)}</p>`
-        : `<p class="karaoke-line" data-i="${item.lineIndex}">${escapeHtml(item.text)}</p>`
+        : `<p class="karaoke-line" data-i="${item.lineIndex}"><span class="karaoke-text">${escapeHtml(item.text)}</span><span class="karaoke-fill" aria-hidden="true">${escapeHtml(item.text)}</span></p>`
     ))
     .join("");
 }
@@ -629,14 +641,24 @@ function mountKaraoke(track, lyrics, target) {
   state.karaokeTimelines.set(track.id, timeline);
   state.karaokeActive = -1;
   target.innerHTML = renderKaraokeDom(timeline);
+  const first = timeline.find((item) => item.kind === "line");
+  updateKaraokeNow(first?.text || "La letra aparece acá cuando arranca el tema", true);
 }
 
 function playbackElapsed() {
   const track = currentTrack();
   if (state.usingEmbed && state.embedStarted) {
-    return Math.min(track?.duracion_seg || 0, (Date.now() - state.embedStarted) / 1000);
+    const raw = (Date.now() - state.embedStarted) / 1000 - state.audioLeadSec;
+    return Math.min(track?.duracion_seg || 0, Math.max(0, raw));
   }
   return audio.currentTime || 0;
+}
+
+function updateKaraokeNow(text, waiting) {
+  const now = document.querySelector("#ficha-karaoke-now");
+  if (!now) return;
+  now.classList.toggle("is-waiting", Boolean(waiting));
+  now.textContent = text;
 }
 
 function updateKaraokeHighlight(elapsedSec) {
@@ -645,24 +667,36 @@ function updateKaraokeHighlight(elapsedSec) {
   const timeline = state.karaokeTimelines.get(track.id);
   if (!timeline) return;
   const singable = timeline.filter((item) => item.kind === "line");
-  let active = 0;
+  if (!singable.length) {
+    updateKaraokeNow("Este tema no tiene letra para cantar", true);
+    return;
+  }
+  let active = -1;
   for (const item of singable) {
     if (elapsedSec >= item.startSec) active = item.lineIndex;
   }
-  if (state.karaokeActive === active) return;
-  state.karaokeActive = active;
+  const current = singable[Math.max(active, 0)];
+  const waiting = elapsedSec < singable[0].startSec;
+  const span = Math.max((current.endSec - current.startSec) || 1, 0.4);
+  const fill = waiting ? 0 : Math.max(0, Math.min(1, (elapsedSec - current.startSec) / span));
+  updateKaraokeNow(waiting ? current.text : current.text, waiting);
   document.querySelectorAll("#ficha-lyrics .karaoke-line, #panel-body .karaoke-line").forEach((node) => {
     const index = Number(node.dataset.i);
-    node.classList.toggle("is-past", index < active);
-    node.classList.toggle("is-active", index === active);
-    node.classList.toggle("is-next", index === active + 1);
+    node.classList.toggle("is-past", !waiting && index < active);
+    node.classList.toggle("is-active", !waiting && index === active);
+    node.classList.toggle("is-next", waiting ? index === 0 : index === active + 1);
+    const paint = node.querySelector(".karaoke-fill");
+    if (paint) paint.style.setProperty("--fill", index === active && !waiting ? String(fill) : "0");
   });
-  document.querySelectorAll("#ficha-lyrics .karaoke-line.is-active, #panel-body .karaoke-line.is-active").forEach((node) => {
-    const box = node.parentElement;
-    if (!box) return;
-    const top = node.offsetTop - box.clientHeight / 2 + node.clientHeight / 2;
-    if (Math.abs(box.scrollTop - top) > 16) box.scrollTo({ top, behavior: "smooth" });
-  });
+  if (state.karaokeActive !== active) {
+    state.karaokeActive = active;
+    const focus = document.querySelector("#ficha-lyrics .karaoke-line.is-active, #ficha-lyrics .karaoke-line.is-next");
+    const box = document.querySelector("#ficha-lyrics");
+    if (focus && box) {
+      const top = focus.offsetTop - box.clientHeight / 2 + focus.clientHeight / 2;
+      if (Math.abs(box.scrollTop - top) > 16) box.scrollTo({ top, behavior: "smooth" });
+    }
+  }
 }
 
 function formatLyrics(text) {

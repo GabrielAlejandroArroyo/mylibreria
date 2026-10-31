@@ -452,10 +452,19 @@ dialog textarea {
   text-transform: uppercase;
   color: var(--muted);
 }
-.karaoke-hint {
-  margin: 0 0 16px;
-  color: var(--muted);
-  font-size: 12px;
+.karaoke-now {
+  margin: 0 0 18px;
+  min-height: 2.2em;
+  font-size: 30px;
+  font-weight: 700;
+  line-height: 1.25;
+  color: #1ed760;
+  letter-spacing: -0.03em;
+}
+.karaoke-now.is-waiting {
+  color: #fff;
+  opacity: 0.72;
+  font-weight: 600;
 }
 .ficha .lyrics,
 #ficha-lyrics {
@@ -480,20 +489,34 @@ dialog textarea {
   color: var(--muted);
 }
 .karaoke-line {
+  position: relative;
   margin: 0;
-  opacity: 0.55;
-  transform: scale(0.98);
+  opacity: 0.82;
+  color: #f4f4f4;
+  transform: scale(0.99);
   transform-origin: left center;
   transition: color .18s ease, opacity .18s ease, transform .18s ease;
 }
-.karaoke-line.is-past { opacity: 0.4; }
-.karaoke-line.is-next { opacity: 0.75; }
+.karaoke-line.is-past { opacity: 0.28; color: #9a9a9a; }
+.karaoke-line.is-next { opacity: 1; color: #fff; }
 .karaoke-line.is-active {
   opacity: 1;
-  color: #1ed760;
+  color: #8f8f8f;
   font-weight: 650;
   font-size: 28px;
   transform: scale(1.02);
+}
+.karaoke-text { position: relative; }
+.karaoke-fill {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: 100%;
+  color: #1ed760;
+  overflow: hidden;
+  clip-path: inset(0 calc(100% - (var(--fill, 0) * 100%)) 0 0);
+  pointer-events: none;
 }
 .panel-body .karaoke-line.is-active { font-size: 18px; }
 .now { cursor: pointer; }
@@ -544,6 +567,7 @@ input[type="range"]::-webkit-slider-thumb {
   .ficha-side h2 { font-size: 30px; }
   .ficha-grid { grid-template-columns: 1fr; }
   .ficha-karaoke-pane { min-height: 360px; }
-  .ficha .lyrics, #ficha-lyrics { font-size: 18px; max-height: 52vh; }
+  .ficha .lyrics, #ficha-lyrics { font-size: 18px; max-height: 48vh; }
+  .karaoke-now { font-size: 22px; }
   .karaoke-line.is-active { font-size: 22px; }
 }
