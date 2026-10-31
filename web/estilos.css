@@ -366,12 +366,12 @@ dialog textarea {
 .ficha-top { display: flex; align-items: center; gap: 16px; margin-bottom: 18px; }
 .ficha-grid {
   display: grid;
-  grid-template-columns: minmax(260px, 380px) 1fr;
-  gap: 36px;
-  align-items: start;
+  grid-template-columns: 1fr;
+  gap: 22px;
+  max-width: 760px;
 }
 .ficha-cover {
-  width: min(100%, 340px);
+  width: min(100%, 280px);
   aspect-ratio: 1;
   border-radius: 12px;
   background: #222 center/cover no-repeat;
@@ -457,7 +457,6 @@ input[type="range"]::-webkit-slider-thumb {
   .hero-cover { width: 120px; height: 120px; }
   .hero h1 { font-size: 32px; }
   .main { overflow: visible; }
-  .ficha-grid { grid-template-columns: 1fr; }
   .ficha-side h2 { font-size: 30px; }
   .ficha .lyrics { font-size: 17px; }
 }
