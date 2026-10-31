@@ -21,6 +21,9 @@ const state = {
   recent: JSON.parse(localStorage.getItem("suno-recent") || "[]"),
   lyrics: new Map(),
   seeking: false,
+  localApi: "",
+  nuevos: [],
+  syncing: false,
 };
 
 const PLAY = `<svg viewBox="0 0 24 24"><path d="M8 5v14l12-7z"/></svg>`;
@@ -68,6 +71,7 @@ function visibleTracks() {
   const query = state.query.trim().toLowerCase();
   return state.tracks.filter((track) => {
     if (state.view === "gustos" && !state.likes.has(track.id)) return false;
+    if (state.view === "nuevos" && !track.nuevo && !state.nuevos.includes(track.id)) return false;
     if (state.tag && !track.etiquetas.includes(state.tag)) return false;
     return matchesQuery(track, query);
   });
@@ -111,7 +115,7 @@ function card(track) {
     <article class="card" data-id="${track.id}">
       <div class="card-cover" style="${coverStyle(track)}"></div>
       <button class="play-fab" data-play="${track.id}" aria-label="Reproducir">${playing && !audio.paused ? PAUSE : PLAY}</button>
-      <h3>${escapeHtml(track.titulo)}</h3>
+      <h3>${escapeHtml(track.titulo)}${track.nuevo ? '<span class="badge-new">NUEVO</span>' : ""}</h3>
       <p>${escapeHtml(track.etiquetas.slice(0, 2).join(" · ") || track.autor)}</p>
     </article>`;
 }
@@ -134,7 +138,7 @@ function row(track, index) {
         <div class="title-cell">
           <div class="row-cover" style="${coverStyle(track)}"></div>
           <div class="stack">
-            <strong>${escapeHtml(track.titulo)}</strong>
+            <strong>${escapeHtml(track.titulo)}${track.nuevo ? '<span class="badge-new">NUEVO</span>' : ""}</strong>
             <span class="muted">${escapeHtml(track.autor)}${track.instrumental ? " · Instrumental" : ""}</span>
           </div>
         </div>
@@ -198,6 +202,7 @@ function renderHome() {
     ${hero}
     ${rowStrip("Escuchados hace un rato", recent)}
     ${rowStrip("Los más reproducidos en Suno", popular)}
+    ${rowStrip("Recién llegados de Suno", state.tracks.filter((track) => track.nuevo), "nuevos")}
     ${rowStrip("Tus me gusta", liked, "gustos")}
     ${rowStrip("Últimos temas", state.tracks.slice(0, 14), "biblioteca")}`;
 }
@@ -214,7 +219,7 @@ function render() {
       <div class="cards wrap">${state.tracks.slice(0, 18).map(card).join("")}</div>`;
     return;
   }
-  const title = state.tag || (state.view === "gustos" ? "Me gusta" : state.query ? `Resultados de “${state.query}”` : "Tu biblioteca");
+  const title = state.tag || (state.view === "gustos" ? "Me gusta" : state.view === "nuevos" ? "Temas nuevos" : state.query ? `Resultados de “${state.query}”` : "Tu biblioteca");
   if (state.view === "buscar" || state.tag) {
     viewEl.innerHTML = `
       <div class="section-head"><h2>${escapeHtml(title)}</h2><span class="muted">${tracks.length} temas</span></div>
@@ -261,9 +266,9 @@ function paintPlayer() {
 }
 
 function audioUrl(track) {
-  const isLocal = ["localhost", "127.0.0.1"].includes(location.hostname);
-  if (isLocal) return `/api/audio/${track.id}`;
-  return `https://cdn1.suno.ai/${track.id}.mp3`;
+  if (state.localApi) return `${state.localApi}/api/audio/${track.id}`;
+  if (track.audio_web) return track.audio_web;
+  return "";
 }
 
 async function loadLyrics(track) {
@@ -334,7 +339,14 @@ function playTrack(track, queue) {
     state.index = state.queue.findIndex((item) => item.id === track.id);
   }
   if (state.index < 0) return;
-  audio.src = audioUrl(track);
+  const source = audioUrl(track);
+  if (!source) {
+    paintPlayer();
+    document.querySelector("#now-artist").textContent = "Abrí el reproductor local para escuchar";
+    if (track.url_suno) window.open(track.url_suno, "_blank", "noreferrer");
+    return;
+  }
+  audio.src = source;
   audio.play().catch(() => {});
   remember(track);
   paintPlayer();
@@ -504,11 +516,11 @@ audio.addEventListener("pause", paintPlayer);
 audio.addEventListener("ended", () => step(1));
 audio.addEventListener("error", () => {
   const artist = document.querySelector("#now-artist");
-  if (currentTrack()) {
-    artist.textContent = currentTrack().url_suno
-      ? "Audio local no disponible · abrilo en Suno"
-      : "No se pudo reproducir este audio";
-  }
+  const track = currentTrack();
+  if (!track) return;
+  artist.textContent = state.localApi
+    ? "No se pudo abrir el audio. Conectá Suno y tocá Actualizar."
+    : "En GitHub Pages el audio suena si el tema es nuevo o si abrís http://127.0.0.1:8765";
 });
 
 document.addEventListener("keydown", (event) => {
@@ -523,6 +535,100 @@ document.addEventListener("keydown", (event) => {
   }
 });
 
+function setSyncStatus(text) {
+  const node = document.querySelector("#sync-status");
+  if (node) node.textContent = text;
+}
+
+async function probeLocalApi() {
+  const candidates = ["localhost", "127.0.0.1"].includes(location.hostname)
+    ? [""]
+    : location.protocol === "http:"
+      ? ["http://127.0.0.1:8765"]
+      : [""];
+  for (const base of candidates) {
+    try {
+      const response = await fetch(`${base}/api/ping`);
+      if (!response.ok) continue;
+      const ping = await response.json();
+      state.localApi = base;
+      const extra = ping.nuevos ? ` · ${ping.nuevos} nuevos` : "";
+      setSyncStatus(ping.tiene_sesion ? `Suno conectado${extra}` : "Reproductor local listo. Falta conectar Suno.");
+      return ping;
+    } catch {
+      continue;
+    }
+  }
+  setSyncStatus("Estás en GitHub Pages. Para escuchar todo, abrí el reproductor local.");
+  return null;
+}
+
+async function reloadCatalog() {
+  const catalogUrl = state.localApi ? `${state.localApi}/temas.json` : "temas.json";
+  const response = await fetch(catalogUrl);
+  const payload = await response.json();
+  state.tracks = payload.temas || [];
+  state.tags = payload.etiquetas || [];
+  state.nuevos = payload.nuevos || [];
+  renderTags();
+  render();
+  paintPlayer();
+}
+
+document.querySelector("#session-btn").addEventListener("click", () => {
+  document.querySelector("#session-dialog").showModal();
+});
+document.querySelector("#cancel-session").addEventListener("click", () => {
+  document.querySelector("#session-dialog").close();
+});
+document.querySelector("#session-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  if (!state.localApi && !["localhost", "127.0.0.1"].includes(location.hostname)) {
+    setSyncStatus("La conexión a Suno se hace en http://127.0.0.1:8765");
+    return;
+  }
+  const cookie = document.querySelector("#cookie-input").value.trim();
+  setSyncStatus("Guardando sesión…");
+  const response = await fetch(`${state.localApi}/api/sesion`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ cookie }),
+  });
+  if (!response.ok) {
+    const detail = await response.json().catch(() => ({ detail: "Cookie inválida" }));
+    setSyncStatus(detail.detail || "No se pudo conectar Suno");
+    return;
+  }
+  document.querySelector("#session-dialog").close();
+  setSyncStatus("Sesión guardada. Sincronizando…");
+  document.querySelector("#sync-btn").click();
+});
+document.querySelector("#sync-btn").addEventListener("click", async () => {
+  if (state.syncing) return;
+  if (!state.localApi && !["localhost", "127.0.0.1"].includes(location.hostname)) {
+    setSyncStatus("Actualizá desde el reproductor local o esperá el sync automático de GitHub.");
+    return;
+  }
+  state.syncing = true;
+  setSyncStatus("Buscando temas nuevos en Suno…");
+  try {
+    const response = await fetch(`${state.localApi}/api/sincronizar`, { method: "POST" });
+    const payload = await response.json();
+    if (!response.ok) {
+      setSyncStatus(payload.detail || "Falló la sincronización");
+      return;
+    }
+    await reloadCatalog();
+    const names = (payload.titulos_nuevos || []).slice(0, 3).join(", ");
+    setSyncStatus(payload.nuevos ? `Llegaron ${payload.nuevos} temas nuevos${names ? `: ${names}` : ""}` : "Biblioteca al día");
+    if (payload.nuevos) setView("nuevos");
+  } catch {
+    setSyncStatus("No se pudo sincronizar");
+  } finally {
+    state.syncing = false;
+  }
+});
+
 async function boot() {
   const savedVolume = Number(localStorage.getItem("suno-volume"));
   if (Number.isFinite(savedVolume)) {
@@ -531,13 +637,9 @@ async function boot() {
   } else {
     audio.volume = 0.85;
   }
-  const response = await fetch("temas.json");
-  const payload = await response.json();
-  state.tracks = payload.temas;
-  state.tags = payload.etiquetas;
-  renderTags();
-  render();
-  paintPlayer();
+  await probeLocalApi();
+  await reloadCatalog();
 }
 
 boot();
+

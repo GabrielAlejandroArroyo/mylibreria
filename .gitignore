@@ -2,7 +2,10 @@
 __pycache__/
 *.pyc
 audio/
+playable/
 *.m4a
+!docs/audio/*.m4a
 .env
 .env.*
+!.env.example
 web/temas.json

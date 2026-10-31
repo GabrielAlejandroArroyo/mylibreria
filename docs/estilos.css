@@ -122,6 +122,42 @@ a { color: inherit; }
   outline: none;
 }
 .search-wrap:focus-within { outline: 1px solid #fff; color: #fff; }
+.sync-bar {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin: 0 0 12px;
+}
+.sync-bar span { color: var(--muted); font-size: 13px; }
+.badge-new {
+  display: inline-block;
+  margin-left: 6px;
+  background: var(--green);
+  color: #000;
+  font-size: 10px;
+  font-weight: 800;
+  border-radius: 999px;
+  padding: 1px 6px;
+  vertical-align: middle;
+}
+dialog {
+  border: 0;
+  border-radius: 12px;
+  background: #181818;
+  color: #fff;
+  width: min(520px, 92vw);
+  padding: 22px;
+}
+dialog::backdrop { background: rgba(0,0,0,.65); }
+dialog textarea {
+  width: 100%;
+  background: #242424;
+  border: 1px solid #333;
+  border-radius: 8px;
+  padding: 10px;
+  margin: 12px 0;
+}
 .mobile-nav { display: none; gap: 8px; margin-bottom: 10px; overflow-x: auto; }
 .mobile-nav button {
   background: #242424;
