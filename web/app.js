@@ -65,6 +65,21 @@ function currentTrack() {
   return state.queue[state.index] || null;
 }
 
+function isEmbedPlaying() {
+  return state.usingEmbed && Boolean(state.embedStarted);
+}
+
+function isPlaybackPaused() {
+  if (isEmbedPlaying()) return false;
+  if (!currentTrack()) return true;
+  return audio.paused;
+}
+
+function isTrackPlaying(track) {
+  if (!track || currentTrack()?.id !== track.id) return false;
+  return isEmbedPlaying() || !audio.paused;
+}
+
 function matchesQuery(track, query) {
   if (!query) return true;
   const haystack = `${track.titulo} ${track.estilo} ${track.etiquetas.join(" ")} ${track.autor}`.toLowerCase();
@@ -94,16 +109,27 @@ function remember(track) {
   localStorage.setItem("suno-recent", JSON.stringify(state.recent));
 }
 
-function setView(name, tag = "") {
-  state.view = name;
-  state.tag = tag;
-  document.querySelectorAll(".nav-btn").forEach((button) => {
+function syncNavUi(name, tag = "") {
+  document.querySelectorAll(".sidebar .nav-btn, .mobile-nav [data-view]").forEach((button) => {
     button.classList.toggle("is-active", button.dataset.view === name && !tag);
   });
   document.querySelectorAll(".tag-btn").forEach((button) => {
     button.classList.toggle("is-active", button.dataset.tag === tag);
   });
+}
+
+/** Cambia la vista del catálogo sin pausar ni cambiar el tema en reproducción. */
+function navigateTo(name, { tag = "", clearSearch = true } = {}) {
+  state.view = name;
+  state.tag = tag;
+  if (clearSearch) {
+    state.query = "";
+    searchInput.value = "";
+  }
+  syncNavUi(name, tag);
+  closeFicha();
   render();
+  paintPlayer();
 }
 
 function greeting() {
@@ -114,11 +140,11 @@ function greeting() {
 }
 
 function card(track) {
-  const playing = currentTrack()?.id === track.id;
+  const playing = isTrackPlaying(track);
   return `
     <article class="card" data-id="${track.id}">
       <div class="card-cover" style="${coverStyle(track)}"></div>
-      <button class="play-fab" data-play="${track.id}" aria-label="Reproducir">${playing && !audio.paused ? PAUSE : PLAY}</button>
+      <button class="play-fab" data-play="${track.id}" aria-label="Reproducir">${playing ? PAUSE : PLAY}</button>
       <h3>${escapeHtml(track.titulo)}${track.nuevo ? '<span class="badge-new">NUEVO</span>' : ""}</h3>
       <p>${escapeHtml(track.etiquetas.slice(0, 2).join(" · ") || track.autor)}</p>
     </article>`;
@@ -133,7 +159,7 @@ function escapeHtml(value) {
 }
 
 function row(track, index) {
-  const playing = currentTrack()?.id === track.id;
+  const playing = isTrackPlaying(track);
   const chips = track.etiquetas.map((tag) => `<span class="chip">${escapeHtml(tag)}</span>`).join("");
   return `
     <tr class="track ${playing ? "is-current" : ""}" data-id="${track.id}">
@@ -247,7 +273,7 @@ function paintPlayer() {
   const cover = document.querySelector("#now-cover");
   const like = document.querySelector("#like-btn");
   const link = document.querySelector("#suno-link");
-  const isPaused = state.usingEmbed ? false : audio.paused;
+  const isPaused = isPlaybackPaused();
   document.querySelector("#play-icon").outerHTML = isPaused ? PLAY.replace("<svg", '<svg id="play-icon"') : PAUSE.replace("<svg", '<svg id="play-icon"');
   document.querySelector("#shuffle").classList.toggle("is-on", state.shuffle);
   document.querySelector("#repeat").classList.toggle("is-on", state.repeat !== "off");
@@ -276,7 +302,7 @@ function fichaEl() {
 
 function openFicha() {
   fichaEl().hidden = false;
-  paintFicha(state.usingEmbed ? false : audio.paused);
+  paintFicha(isPlaybackPaused());
 }
 
 function closeFicha() {
@@ -484,29 +510,29 @@ function step(direction) {
 
 searchInput.addEventListener("input", () => {
   state.query = searchInput.value;
-  if (state.query && state.view === "inicio") state.view = "buscar";
-  document.querySelectorAll(".nav-btn").forEach((button) => {
-    button.classList.toggle("is-active", button.dataset.view === state.view && !state.tag);
-  });
+  if (state.query && state.view === "inicio") {
+    navigateTo("buscar", { clearSearch: false });
+    return;
+  }
+  syncNavUi(state.view, state.tag);
   render();
+  paintPlayer();
 });
 
 document.body.addEventListener("click", (event) => {
-  const nav = event.target.closest(".nav-btn");
+  const nav = event.target.closest(".sidebar .nav [data-view], .mobile-nav [data-view]");
   if (nav) {
-    state.query = "";
-    searchInput.value = "";
-    setView(nav.dataset.view);
+    navigateTo(nav.dataset.view);
     return;
   }
   const tag = event.target.closest(".tag-btn");
   if (tag) {
-    setView("buscar", tag.dataset.tag);
+    navigateTo("buscar", { tag: tag.dataset.tag });
     return;
   }
   const jump = event.target.closest("[data-jump]");
   if (jump) {
-    setView(jump.dataset.jump);
+    navigateTo(jump.dataset.jump);
     return;
   }
   const playAll = event.target.closest("[data-play-all]");
@@ -593,7 +619,10 @@ document.querySelector("#like-btn").addEventListener("click", () => {
   else state.likes.add(track.id);
   saveLikes();
   paintPlayer();
-  if (state.view === "gustos" || state.view === "inicio") render();
+  if (state.view === "gustos" || state.view === "inicio") {
+    render();
+    paintPlayer();
+  }
 });
 document.querySelector("#lyrics-btn").addEventListener("click", () => {
   if (!panel.hidden && state.tab === "letra") closePanel();
@@ -739,7 +768,7 @@ document.querySelector("#sync-btn").addEventListener("click", async () => {
     await reloadCatalog();
     const names = (payload.titulos_nuevos || []).slice(0, 3).join(", ");
     setSyncStatus(payload.nuevos ? `Llegaron ${payload.nuevos} temas nuevos${names ? `: ${names}` : ""}` : "Biblioteca al día");
-    if (payload.nuevos) setView("nuevos");
+    if (payload.nuevos) navigateTo("nuevos");
   } catch {
     setSyncStatus("No se pudo sincronizar");
   } finally {

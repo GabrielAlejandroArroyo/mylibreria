@@ -167,6 +167,11 @@ dialog textarea {
   padding: 8px 14px;
   font-weight: 700;
   white-space: nowrap;
+  color: #b3b3b3;
+}
+.mobile-nav button.is-active {
+  background: #1a1a1a;
+  color: #fff;
 }
 
 .view { padding: 8px 24px 32px; }
