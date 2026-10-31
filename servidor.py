@@ -7,7 +7,6 @@ from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
-from fastapi.staticfiles import StaticFiles
 
 ROOT = Path(__file__).resolve().parent
 CATALOG_PATH = ROOT / "catalogo.json"
@@ -114,12 +113,29 @@ def track_or_404(track_id: str) -> dict:
 
 
 app = FastAPI(title="Biblioteca Suno")
-app.mount("/static", StaticFiles(directory=WEB_DIR), name="static")
 
 
 @app.get("/")
 def inicio() -> FileResponse:
     return FileResponse(WEB_DIR / "index.html")
+
+
+@app.get("/estilos.css")
+def estilos() -> FileResponse:
+    return FileResponse(WEB_DIR / "estilos.css")
+
+
+@app.get("/app.js")
+def script() -> FileResponse:
+    return FileResponse(WEB_DIR / "app.js")
+
+
+@app.get("/temas.json")
+def catalogo_web() -> FileResponse:
+    path = WEB_DIR / "temas.json"
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="Generá el sitio con generar_sitio.py")
+    return FileResponse(path)
 
 
 @app.get("/api/temas")

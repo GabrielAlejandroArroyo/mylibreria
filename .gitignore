@@ -5,3 +5,4 @@ audio/
 *.m4a
 .env
 .env.*
+web/temas.json

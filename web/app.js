@@ -260,7 +260,14 @@ function paintPlayer() {
   document.title = `${track.titulo} — Suno`;
 }
 
+function audioUrl(track) {
+  const isLocal = ["localhost", "127.0.0.1"].includes(location.hostname);
+  if (isLocal) return `/api/audio/${track.id}`;
+  return `https://cdn1.suno.ai/${track.id}.mp3`;
+}
+
 async function loadLyrics(track) {
+  if (track.letra) return track.letra;
   if (state.lyrics.has(track.id)) return state.lyrics.get(track.id);
   const response = await fetch(`/api/temas/${track.id}`);
   if (!response.ok) return "";
@@ -327,7 +334,7 @@ function playTrack(track, queue) {
     state.index = state.queue.findIndex((item) => item.id === track.id);
   }
   if (state.index < 0) return;
-  audio.src = `/api/audio/${track.id}`;
+  audio.src = audioUrl(track);
   audio.play().catch(() => {});
   remember(track);
   paintPlayer();
@@ -497,7 +504,11 @@ audio.addEventListener("pause", paintPlayer);
 audio.addEventListener("ended", () => step(1));
 audio.addEventListener("error", () => {
   const artist = document.querySelector("#now-artist");
-  if (currentTrack()) artist.textContent = "Este archivo está cifrado por Suno y el navegador no puede abrirlo";
+  if (currentTrack()) {
+    artist.textContent = currentTrack().url_suno
+      ? "Audio local no disponible · abrilo en Suno"
+      : "No se pudo reproducir este audio";
+  }
 });
 
 document.addEventListener("keydown", (event) => {
@@ -520,7 +531,7 @@ async function boot() {
   } else {
     audio.volume = 0.85;
   }
-  const response = await fetch("/api/temas");
+  const response = await fetch("temas.json");
   const payload = await response.json();
   state.tracks = payload.temas;
   state.tags = payload.etiquetas;
