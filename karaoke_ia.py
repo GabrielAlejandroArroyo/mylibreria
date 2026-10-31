@@ -233,11 +233,46 @@ def _overlap_score(a: str, b: str) -> float:
     return len(aw & bw) / len(aw)
 
 
+ROOT = Path(__file__).resolve().parent
+
+
+def materialize_playable_clip(clip_id: str, dest: Path) -> bool:
+    from suno_cliente import (
+        CLOUD_AUDIO,
+        decrypt_media,
+        es_audio_reproducible,
+        load_env,
+        normalize_cookie,
+        request_bytes,
+        SunoSesion,
+    )
+
+    playable = ROOT / "playable" / f"{clip_id}.m4a"
+    if playable.is_file() and playable.stat().st_size > 1000:
+        dest.write_bytes(playable.read_bytes())
+        return es_audio_reproducible(dest.read_bytes())
+
+    raw = request_bytes(CLOUD_AUDIO.format(id=clip_id))
+    if es_audio_reproducible(raw):
+        dest.write_bytes(raw)
+        return True
+
+    cookie = load_env().get("SUNO_COOKIE", "").strip()
+    if not cookie:
+        return False
+    sesion = SunoSesion(normalize_cookie(cookie))
+    sesion.conectar()
+    rights = sesion.derechos(clip_id)
+    plain = decrypt_media(clip_id, raw, rights)
+    if not es_audio_reproducible(plain):
+        return False
+    dest.write_bytes(plain)
+    return True
+
+
 def download_clip(clip_id: str, target: Path) -> None:
-    url = CLOUD_AUDIO.format(id=clip_id)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    with urllib.request.urlopen(url, timeout=120) as response:
-        target.write_bytes(response.read())
+    if not materialize_playable_clip(clip_id, target):
+        raise RuntimeError("No se pudo descifrar el audio (¿SUNO_COOKIE en .env?)")
 
 
 def transcribe_whisper_openai(audio_path: Path, api_key: str) -> list[dict[str, Any]]:
@@ -276,6 +311,86 @@ def transcribe_whisper_openai(audio_path: Path, api_key: str) -> list[dict[str, 
     return list(data.get("segments") or [])
 
 
+def align_lyrics_llm(
+    *,
+    api_key: str,
+    lyrics: str,
+    duration_sec: float,
+    title: str = "",
+    estilo: str = "",
+) -> list[float] | None:
+    import urllib.request as req
+
+    items = [item for item in parse_lyric_items(lyrics) if item.kind == "line"]
+    if not items:
+        return None
+    numbered = "\n".join(f"{index + 1}. {item.text}" for index, item in enumerate(items))
+    prompt = (
+        f"Canción: {title}\nDuración total: {duration_sec:.1f} segundos\nEstilo: {estilo[:240]}\n\n"
+        "Asigná el segundo exacto (desde el inicio del audio) en que empieza a cantarse cada línea.\n"
+        "Respetá intro instrumental antes de la voz, coros más apretados y pausas entre secciones.\n"
+        "Respondé SOLO JSON: {\"starts\":[números en orden, uno por línea]}\n\n"
+        f"Líneas:\n{numbered}"
+    )
+    body = json.dumps(
+        {
+            "model": "gpt-4o-mini",
+            "temperature": 0.2,
+            "response_format": {"type": "json_object"},
+            "messages": [
+                {"role": "system", "content": "Sos un ingeniero de sincronización karaoke. Devolvés tiempos monótonos crecientes."},
+                {"role": "user", "content": prompt},
+            ],
+        },
+        ensure_ascii=False,
+    ).encode("utf-8")
+    request = req.Request(
+        "https://api.openai.com/v1/chat/completions",
+        data=body,
+        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+        method="POST",
+    )
+    with req.urlopen(request, timeout=120) as response:
+        payload = json.loads(response.read().decode("utf-8"))
+    content = payload["choices"][0]["message"]["content"]
+    parsed = json.loads(content)
+    starts = parsed.get("starts")
+    if not isinstance(starts, list) or len(starts) != len(items):
+        return None
+    cleaned: list[float] = []
+    last = 0.0
+    for raw in starts:
+        value = max(0.0, min(float(raw), duration_sec))
+        if value < last:
+            value = last + 0.4
+        cleaned.append(round(value, 2))
+        last = value
+    return cleaned
+
+
+def build_timeline_from_starts(items: list[LyricItem], starts: list[float], duration_sec: float) -> list[dict[str, Any]]:
+    lines = [item for item in items if item.kind == "line"]
+    timeline: list[dict[str, Any]] = []
+    for item in items:
+        if item.kind == "section":
+            timeline.append({"kind": "section", "text": item.text, "startSec": 0.0, "endSec": 0.0, "lineIndex": -1})
+            continue
+        if item.kind != "line":
+            continue
+        start = starts[item.line_index] if item.line_index < len(starts) else 0.0
+        next_start = starts[item.line_index + 1] if item.line_index + 1 < len(starts) else duration_sec
+        timeline.append(
+            {
+                "kind": "line",
+                "text": item.text,
+                "startSec": start,
+                "endSec": round(min(max(next_start, start + 0.5), duration_sec), 2),
+                "lineIndex": item.line_index,
+            },
+        )
+    return timeline
+
+
 def build_whisper_timeline(
     items: list[LyricItem],
     duration_sec: float,
@@ -308,6 +423,63 @@ def build_whisper_timeline(
     return timeline
 
 
+_LOCAL_WHISPER: Any = None
+
+
+def load_audio_pcm16_mono(path: Path, sample_rate: int = 16000) -> Any:
+    import numpy as np
+    import subprocess
+
+    command = [
+        "ffmpeg",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-i",
+        str(path),
+        "-f",
+        "s16le",
+        "-acodec",
+        "pcm_s16le",
+        "-ar",
+        str(sample_rate),
+        "-ac",
+        "1",
+        "-",
+    ]
+    completed = subprocess.run(command, capture_output=True, check=True)
+    audio = np.frombuffer(completed.stdout, dtype=np.int16).astype("float32") / 32768.0
+    return audio
+
+
+def transcribe_whisper_local(audio_path: Path, model_size: str = "base") -> list[dict[str, Any]]:
+    global _LOCAL_WHISPER
+    from faster_whisper import WhisperModel
+
+    if _LOCAL_WHISPER is None or getattr(_LOCAL_WHISPER, "_karaoke_model_size", "") != model_size:
+        _LOCAL_WHISPER = WhisperModel(model_size, device="cpu", compute_type="int8")
+        _LOCAL_WHISPER._karaoke_model_size = model_size  # type: ignore[attr-defined]
+    audio = load_audio_pcm16_mono(audio_path)
+    segments, _ = _LOCAL_WHISPER.transcribe(
+        audio,
+        vad_filter=True,
+        word_timestamps=False,
+    )
+    return [{"start": float(seg.start), "end": float(seg.end), "text": str(seg.text or "").strip()} for seg in segments]
+
+
+def transcribe_audio(audio_path: Path, *, api_key: str = "", model_size: str = "base") -> tuple[list[dict[str, Any]], str]:
+    if api_key:
+        try:
+            segments = transcribe_whisper_openai(audio_path, api_key)
+            if segments:
+                return segments, "whisper-1"
+        except Exception:
+            pass
+    segments = transcribe_whisper_local(audio_path, model_size=model_size)
+    return segments, f"whisper-local-{model_size}"
+
+
 def sync_track(
     *,
     clip_id: str,
@@ -315,28 +487,57 @@ def sync_track(
     duration_sec: float,
     api_key: str = "",
     use_whisper: bool = False,
+    use_llm: bool = False,
+    whisper_model: str = "base",
+    title: str = "",
+    estilo: str = "",
 ) -> dict[str, Any]:
     items = parse_lyric_items(lyrics)
     method = "estructura-ia"
     timeline = build_structure_timeline(items, duration_sec)
-    if use_whisper and api_key and lyrics.strip():
+    lead = SUNO_EMBED_LEAD
+    if lyrics.strip() and use_whisper:
         with tempfile.TemporaryDirectory() as tmp:
             audio_path = Path(tmp) / f"{clip_id}.m4a"
             try:
-                download_clip(clip_id, audio_path)
-                segments = transcribe_whisper_openai(audio_path, api_key)
-                if segments:
-                    timeline = build_whisper_timeline(items, duration_sec, segments)
-                    method = "whisper-1"
-            except Exception:
-                pass
+                if materialize_playable_clip(clip_id, audio_path):
+                    segments, method = transcribe_audio(audio_path, api_key=api_key, model_size=whisper_model)
+                    if segments:
+                        timeline = build_whisper_timeline(items, duration_sec, segments)
+                        vocal_segments = [seg for seg in segments if str(seg.get("text") or "").strip()]
+                        if vocal_segments:
+                            first_vocal = min(float(seg["start"]) for seg in vocal_segments)
+                            if first_vocal > 0.4:
+                                lead = round(min(2.4, max(0.6, first_vocal * 0.35)), 2)
+            except Exception as exc:
+                import sys
+
+                print(f"whisper falló {clip_id}: {exc}", file=sys.stderr)
+    if method == "estructura-ia" and use_llm and api_key and lyrics.strip():
+        try:
+            starts = align_lyrics_llm(
+                api_key=api_key,
+                lyrics=lyrics,
+                duration_sec=duration_sec,
+                title=title,
+                estilo=estilo,
+            )
+            if starts:
+                timeline = build_timeline_from_starts(items, starts, duration_sec)
+                method = "gpt-4o-mini"
+                if starts[0] > 0.4:
+                    lead = round(min(2.4, max(0.6, starts[0] * 0.35)), 2)
+        except Exception as exc:
+            import sys
+
+            print(f"llm falló {clip_id}: {exc}", file=sys.stderr)
     line_starts = [
         round(item["startSec"], 2)
         for item in timeline
         if item.get("kind") == "line" and item.get("lineIndex", -1) >= 0
     ]
     return {
-        "lead": SUNO_EMBED_LEAD,
+        "lead": lead,
         "method": method,
         "starts": line_starts,
         "timeline": timeline,

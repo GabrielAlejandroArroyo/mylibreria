@@ -22,6 +22,7 @@ jobs:
       - name: Sincronizar
         env:
           SUNO_COOKIE: ${{ secrets.SUNO_COOKIE }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: python sincronizar.py --publicar-web
       - name: Publicar
         run: |

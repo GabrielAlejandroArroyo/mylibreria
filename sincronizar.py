@@ -24,6 +24,24 @@ STATE_PATH = ROOT / "sync_estado.json"
 MAX_WEB_AUDIO = 12 * 1024 * 1024
 
 
+def actualizar_karaoke_ia(limitar: int = 45) -> None:
+    import subprocess
+    import sys
+
+    command = [
+        sys.executable,
+        str(ROOT / "generar_karaoke.py"),
+        "--ia",
+        "--resume",
+        "--model",
+        "tiny",
+    ]
+    if limitar > 0:
+        command.extend(["--limit", str(limitar)])
+    subprocess.run(command, cwd=ROOT, check=False)
+    subprocess.run([sys.executable, str(ROOT / "generar_sitio.py")], cwd=ROOT, check=False)
+
+
 def load_json(path: Path, default):
     if not path.is_file():
         return default
@@ -187,6 +205,7 @@ def sincronizar(*, publicar_web: bool = False, limitar_nuevos: int = 0) -> dict:
             publicados += 1
 
     generar_sitio()
+    actualizar_karaoke_ia(limitar=45)
     todos = [clip["id"] for clip in clips]
     save_json(
         STATE_PATH,
