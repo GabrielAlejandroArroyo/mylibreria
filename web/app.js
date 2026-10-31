@@ -43,10 +43,19 @@ const state = {
   embedPool: new Map(),
   warmVisibleTimer: 0,
   hoverWarmTimer: 0,
+  karaokeRaf: 0,
+  prefetching: new Set(),
 };
 
-const EMBED_POOL_MAX = 6;
+const EMBED_POOL_MAX = 8;
 const SUNO_AUTOPLAY_LEAD = 1.15;
+const MODEL_EMBED_LEAD = [
+  [/v4|chirp|auk/i, 1.05],
+  [/v3\.5/i, 1.1],
+  [/v3/i, 1.16],
+  [/v2/i, 1.22],
+  [/alpha|beta/i, 1.12],
+];
 const CLOUDFRONT_CLIP = (id) => `https://d2lwuy8qc234o3.cloudfront.net/1/clip/${encodeURIComponent(id)}.m4a`;
 
 const PLAY = `<svg viewBox="0 0 24 24"><path d="M8 5v14l12-7z"/></svg>`;
@@ -433,9 +442,48 @@ function shouldUseEmbedPool() {
   return !state.localApi;
 }
 
+function embedLeadForTrack(track) {
+  if (!track) return SUNO_AUTOPLAY_LEAD;
+  const meta = state.karaokeMeta.get(track.id);
+  if (meta?.lead > 0) return meta.lead;
+  const model = String(meta?.modelo || track.modelo || "");
+  for (const [pattern, lead] of MODEL_EMBED_LEAD) {
+    if (pattern.test(model)) return lead;
+  }
+  return SUNO_AUTOPLAY_LEAD;
+}
+
 function prefetchClipMedia(trackId) {
   if (!trackId) return;
   fetch(CLOUDFRONT_CLIP(trackId), { mode: "no-cors", cache: "force-cache" }).catch(() => {});
+}
+
+function cacheKaraokeForTrack(track) {
+  if (!track?.id) return;
+  const lyrics = track.letra || state.lyrics.get(track.id) || "";
+  if (track.letra) state.lyrics.set(track.id, track.letra);
+  const timeline = karaokeTimelineForTrack(track, lyrics);
+  state.karaokeTimelines.set(track.id, timeline);
+  if (!state.karaokeDomCache.has(track.id)) {
+    state.karaokeDomCache.set(track.id, renderKaraokeDom(timeline));
+  }
+}
+
+function prefetchTrackBundle(trackOrId) {
+  const track = typeof trackOrId === "string" ? byId(trackOrId) : trackOrId;
+  if (!track?.id || state.prefetching.has(track.id)) return;
+  state.prefetching.add(track.id);
+  cacheKaraokeForTrack(track);
+  prefetchClipMedia(track.id);
+  if (shouldUseEmbedPool()) warmEmbed(track.id);
+  window.setTimeout(() => state.prefetching.delete(track.id), 8000);
+}
+
+function warmKaraokeCacheBatch(ids) {
+  for (const id of ids) {
+    const track = byId(id);
+    if (track) cacheKaraokeForTrack(track);
+  }
 }
 
 function evictEmbedPool(keepIds = new Set()) {
@@ -460,7 +508,9 @@ function warmQueueNeighbors() {
   for (const id of state.recent.slice(0, 4)) warmIds.add(id);
   const playingId = currentTrack()?.id;
   if (playingId) warmIds.delete(playingId);
-  warmIds.forEach((trackId) => warmEmbed(trackId));
+  warmIds.forEach((trackId) => {
+    prefetchTrackBundle(trackId);
+  });
 }
 
 function warmEmbed(trackId) {
@@ -506,9 +556,9 @@ function scheduleWarmVisible() {
   window.clearTimeout(state.warmVisibleTimer);
   state.warmVisibleTimer = window.setTimeout(() => {
     visibleTrackIds().forEach((trackId, index) => {
-      window.setTimeout(() => warmEmbed(trackId), index * 250);
+      window.setTimeout(() => prefetchTrackBundle(trackId), index * 120);
     });
-  }, 100);
+  }, 60);
 }
 
 function retireEmbedFrame(iframe) {
@@ -537,6 +587,11 @@ function clearEmbedPool() {
   state.embedPool.clear();
 }
 
+function stopKaraokeRaf() {
+  if (state.karaokeRaf) cancelAnimationFrame(state.karaokeRaf);
+  state.karaokeRaf = 0;
+}
+
 function resetKaraokeVisuals() {
   document.querySelectorAll("#ficha-lyrics .karaoke-line, #panel-body .karaoke-line").forEach((node) => {
     node.classList.remove("is-past", "is-active", "is-next");
@@ -547,6 +602,7 @@ function resetKaraokeVisuals() {
 function stopCurrentTrack() {
   window.clearTimeout(state.embedTimer);
   window.clearInterval(state.embedTick);
+  stopKaraokeRaf();
   audio.pause();
   audio.removeAttribute("src");
   state.usingEmbed = false;
@@ -586,8 +642,14 @@ function tickEmbedProgress() {
 function startEmbedTimers(track) {
   window.clearTimeout(state.embedTimer);
   window.clearInterval(state.embedTick);
-  state.embedTick = window.setInterval(tickEmbedProgress, 200);
+  stopKaraokeRaf();
+  const loop = () => {
+    if (!state.usingEmbed || currentTrack()?.id !== track.id) return;
+    tickEmbedProgress();
+    state.karaokeRaf = requestAnimationFrame(loop);
+  };
   tickEmbedProgress();
+  state.karaokeRaf = requestAnimationFrame(loop);
   if (track.duracion_seg > 0) {
     const waitMs = Math.max(1000, (track.duracion_seg + state.audioLeadSec) * 1000);
     state.embedTimer = window.setTimeout(() => step(1), waitMs);
@@ -596,8 +658,7 @@ function startEmbedTimers(track) {
 
 function startEmbedClock(autoplayAt) {
   const track = currentTrack();
-  const lead = track ? state.karaokeMeta.get(track.id)?.lead : 0;
-  state.audioLeadSec = Number.isFinite(lead) && lead > 0 ? lead : SUNO_AUTOPLAY_LEAD;
+  state.audioLeadSec = embedLeadForTrack(track);
   state.embedStarted = autoplayAt || Date.now();
 }
 
@@ -658,15 +719,21 @@ function buildLineTimeline(items, durationSec) {
   });
 }
 
-function buildLineTimelineFromStarts(items, starts, durationSec) {
+function buildLineTimelineFromStarts(items, starts, durationSec, ends) {
   const duration = Math.max(Number(durationSec) || 0, 1);
   const stamps = Array.isArray(starts) ? starts : [];
+  const endStamps = Array.isArray(ends) ? ends : [];
   let lineIndex = 0;
   return items.map((item) => {
     if (item.kind !== "line") return { ...item, startSec: 0, endSec: 0, lineIndex: -1 };
     const startSec = Number(stamps[lineIndex]) || 0;
     const nextStart = Number(stamps[lineIndex + 1]);
-    const endSec = Number.isFinite(nextStart) ? Math.min(nextStart, duration) : Math.min(startSec + 3.5, duration);
+    const explicitEnd = Number(endStamps[lineIndex]);
+    const endSec = Number.isFinite(explicitEnd) && explicitEnd > startSec
+      ? Math.min(explicitEnd, duration)
+      : Number.isFinite(nextStart)
+        ? Math.min(nextStart, duration)
+        : Math.min(startSec + 3.5, duration);
     const current = lineIndex;
     lineIndex += 1;
     return { ...item, startSec, endSec, lineIndex: current };
@@ -676,7 +743,9 @@ function buildLineTimelineFromStarts(items, starts, durationSec) {
 function karaokeTimelineForTrack(track, lyrics) {
   const items = parseLyricLines(lyrics);
   const meta = state.karaokeMeta.get(track.id);
-  if (meta?.starts?.length) return buildLineTimelineFromStarts(items, meta.starts, track.duracion_seg);
+  if (meta?.starts?.length) {
+    return buildLineTimelineFromStarts(items, meta.starts, track.duracion_seg, meta.ends);
+  }
   return buildLineTimeline(items, track.duracion_seg);
 }
 
@@ -805,7 +874,7 @@ function updateKaraokeHighlight(elapsedSec) {
   }
   const current = singable[Math.max(active, 0)];
   const waiting = elapsedSec < singable[0].startSec;
-  const span = Math.max((current.endSec - current.startSec) || 1, 0.4);
+  const span = Math.max((current.endSec - current.startSec) || 0.35, 0.25);
   const fill = waiting ? 0 : Math.max(0, Math.min(1, (elapsedSec - current.startSec) / span));
   updateKaraokeNow(waiting ? current.text : current.text, waiting);
   document.querySelectorAll("#ficha-lyrics .karaoke-line, #panel-body .karaoke-line").forEach((node) => {
@@ -888,6 +957,8 @@ function playTrack(track, queue, options = {}) {
     state.index = state.queue.findIndex((item) => item.id === track.id);
   }
   if (state.index < 0) return;
+  cacheKaraokeForTrack(track);
+  prefetchTrackBundle(track);
   stopCurrentTrack();
   const source = state.localApi ? audioUrl(track) : "";
   if (source) {
@@ -910,6 +981,7 @@ function playTrack(track, queue, options = {}) {
 }
 
 function playFromList(trackId, list) {
+  prefetchTrackBundle(trackId);
   const track = list.find((item) => item.id === trackId) || byId(trackId);
   if (!track) return;
   if (currentTrack()?.id === trackId) {
@@ -952,8 +1024,19 @@ viewEl.addEventListener("mouseover", (event) => {
   const trackId = playFab?.dataset.play || row?.dataset.id;
   if (!trackId) return;
   window.clearTimeout(state.hoverWarmTimer);
-  state.hoverWarmTimer = window.setTimeout(() => warmEmbed(trackId), 120);
+  state.hoverWarmTimer = window.setTimeout(() => prefetchTrackBundle(trackId), 40);
 });
+
+document.body.addEventListener(
+  "pointerdown",
+  (event) => {
+    const playFab = event.target.closest("[data-play]");
+    const row = event.target.closest(".card[data-id], tr.track[data-id]");
+    const trackId = playFab?.dataset.play || row?.dataset.id;
+    if (trackId) prefetchTrackBundle(trackId);
+  },
+  true,
+);
 
 searchInput.addEventListener("input", () => {
   state.query = searchInput.value;
@@ -1165,7 +1248,7 @@ async function probeLocalApi() {
 async function loadKaraokeTimings() {
   state.karaokeMeta.clear();
   try {
-    const response = await fetch("karaoke_timings.json", { cache: "no-cache" });
+    const response = await fetch("karaoke_timings.json", { cache: "force-cache" });
     if (!response.ok) return;
     const payload = await response.json();
     for (const [trackId, meta] of Object.entries(payload)) {
@@ -1175,6 +1258,7 @@ async function loadKaraokeTimings() {
   } catch {
     /* sin archivo en local antiguo */
   }
+  warmKaraokeCacheBatch(state.recent.slice(0, 16));
 }
 
 async function reloadCatalog() {

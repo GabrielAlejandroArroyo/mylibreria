@@ -14,6 +14,21 @@ from typing import Any
 CLOUD_AUDIO = "https://d2lwuy8qc234o3.cloudfront.net/1/clip/{id}.m4a"
 SUNO_EMBED_LEAD = 1.15
 
+
+def model_embed_lead(modelo: str) -> float:
+    name = str(modelo or "").lower()
+    if "v4" in name or "chirp" in name or "auk" in name:
+        return 1.05
+    if "v3.5" in name:
+        return 1.1
+    if "v3" in name:
+        return 1.16
+    if "v2" in name:
+        return 1.22
+    if "alpha" in name or "beta" in name:
+        return 1.12
+    return SUNO_EMBED_LEAD
+
 SECTION_KIND = {
     "intro": "intro",
     "outro": "outro",
@@ -491,11 +506,12 @@ def sync_track(
     whisper_model: str = "base",
     title: str = "",
     estilo: str = "",
+    modelo: str = "",
 ) -> dict[str, Any]:
     items = parse_lyric_items(lyrics)
     method = "estructura-ia"
     timeline = build_structure_timeline(items, duration_sec)
-    lead = SUNO_EMBED_LEAD
+    lead = model_embed_lead(modelo)
     if lyrics.strip() and use_whisper:
         with tempfile.TemporaryDirectory() as tmp:
             audio_path = Path(tmp) / f"{clip_id}.m4a"
@@ -536,9 +552,16 @@ def sync_track(
         for item in timeline
         if item.get("kind") == "line" and item.get("lineIndex", -1) >= 0
     ]
+    line_ends = [
+        round(item["endSec"], 2)
+        for item in timeline
+        if item.get("kind") == "line" and item.get("lineIndex", -1) >= 0
+    ]
     return {
         "lead": lead,
         "method": method,
         "starts": line_starts,
+        "ends": line_ends,
+        "modelo": str(modelo or ""),
         "timeline": timeline,
     }

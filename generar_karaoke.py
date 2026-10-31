@@ -83,11 +83,14 @@ def main() -> None:
             whisper_model=args.model,
             title=str(row.get("titulo") or ""),
             estilo=str(row.get("estilo") or ""),
+            modelo=str(row.get("version_modelo") or row.get("modelo") or ""),
         )
         compact = {
             "lead": payload["lead"],
             "method": payload["method"],
             "starts": payload["starts"],
+            "ends": payload.get("ends") or [],
+            "modelo": payload.get("modelo") or "",
         }
         existing[clip_id] = compact
         processed += 1
