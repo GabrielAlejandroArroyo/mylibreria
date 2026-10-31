@@ -1,0 +1,532 @@
+const audio = document.querySelector("#audio");
+const viewEl = document.querySelector("#view");
+const tagList = document.querySelector("#tag-list");
+const searchInput = document.querySelector("#search");
+const panel = document.querySelector("#panel");
+const panelBody = document.querySelector("#panel-body");
+const shell = document.querySelector(".shell");
+
+const state = {
+  tracks: [],
+  tags: [],
+  view: "inicio",
+  tag: "",
+  query: "",
+  queue: [],
+  index: -1,
+  shuffle: false,
+  repeat: "off",
+  tab: "letra",
+  likes: new Set(JSON.parse(localStorage.getItem("suno-likes") || "[]")),
+  recent: JSON.parse(localStorage.getItem("suno-recent") || "[]"),
+  lyrics: new Map(),
+  seeking: false,
+};
+
+const PLAY = `<svg viewBox="0 0 24 24"><path d="M8 5v14l12-7z"/></svg>`;
+const PAUSE = `<svg viewBox="0 0 24 24"><path d="M6 5h4v14H6zm8 0h4v14h-4z"/></svg>`;
+
+function formatTime(seconds) {
+  if (!Number.isFinite(seconds) || seconds < 0) return "0:00";
+  const total = Math.floor(seconds);
+  const minutes = Math.floor(total / 60);
+  const rest = String(total % 60).padStart(2, "0");
+  return `${minutes}:${rest}`;
+}
+
+function formatDate(value) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleDateString("es-AR", { day: "numeric", month: "short", year: "numeric" });
+}
+
+function hue(text) {
+  let hash = 0;
+  for (const char of text) hash = (hash * 33 + char.charCodeAt(0)) >>> 0;
+  return hash % 360;
+}
+
+function coverStyle(track) {
+  const color = `hsl(${hue(track.titulo)} 42% 32%)`;
+  const safeUrl = String(track.portada || "").replaceAll("'", "%27");
+  if (!safeUrl) return `background-color:${color}`;
+  return `background-color:${color};background-image:url('${safeUrl}');background-size:cover;background-position:center`;
+}
+
+function currentTrack() {
+  return state.queue[state.index] || null;
+}
+
+function matchesQuery(track, query) {
+  if (!query) return true;
+  const haystack = `${track.titulo} ${track.estilo} ${track.etiquetas.join(" ")} ${track.autor}`.toLowerCase();
+  return query.split(/\s+/).every((word) => haystack.includes(word));
+}
+
+function visibleTracks() {
+  const query = state.query.trim().toLowerCase();
+  return state.tracks.filter((track) => {
+    if (state.view === "gustos" && !state.likes.has(track.id)) return false;
+    if (state.tag && !track.etiquetas.includes(state.tag)) return false;
+    return matchesQuery(track, query);
+  });
+}
+
+function byId(id) {
+  return state.tracks.find((track) => track.id === id);
+}
+
+function saveLikes() {
+  localStorage.setItem("suno-likes", JSON.stringify([...state.likes]));
+}
+
+function remember(track) {
+  state.recent = [track.id, ...state.recent.filter((id) => id !== track.id)].slice(0, 24);
+  localStorage.setItem("suno-recent", JSON.stringify(state.recent));
+}
+
+function setView(name, tag = "") {
+  state.view = name;
+  state.tag = tag;
+  document.querySelectorAll(".nav-btn").forEach((button) => {
+    button.classList.toggle("is-active", button.dataset.view === name && !tag);
+  });
+  document.querySelectorAll(".tag-btn").forEach((button) => {
+    button.classList.toggle("is-active", button.dataset.tag === tag);
+  });
+  render();
+}
+
+function greeting() {
+  const hour = new Date().getHours();
+  if (hour < 12) return "Buenos días";
+  if (hour < 19) return "Buenas tardes";
+  return "Buenas noches";
+}
+
+function card(track) {
+  const playing = currentTrack()?.id === track.id;
+  return `
+    <article class="card" data-id="${track.id}">
+      <div class="card-cover" style="${coverStyle(track)}"></div>
+      <button class="play-fab" data-play="${track.id}" aria-label="Reproducir">${playing && !audio.paused ? PAUSE : PLAY}</button>
+      <h3>${escapeHtml(track.titulo)}</h3>
+      <p>${escapeHtml(track.etiquetas.slice(0, 2).join(" · ") || track.autor)}</p>
+    </article>`;
+}
+
+function escapeHtml(value) {
+  return String(value)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;");
+}
+
+function row(track, index) {
+  const playing = currentTrack()?.id === track.id;
+  const chips = track.etiquetas.map((tag) => `<span class="chip">${escapeHtml(tag)}</span>`).join("");
+  return `
+    <tr class="track ${playing ? "is-current" : ""}" data-id="${track.id}">
+      <td class="num">${playing ? "▶" : index + 1}</td>
+      <td>
+        <div class="title-cell">
+          <div class="row-cover" style="${coverStyle(track)}"></div>
+          <div class="stack">
+            <strong>${escapeHtml(track.titulo)}</strong>
+            <span class="muted">${escapeHtml(track.autor)}${track.instrumental ? " · Instrumental" : ""}</span>
+          </div>
+        </div>
+      </td>
+      <td><div class="chips">${chips}</div></td>
+      <td class="when">${formatDate(track.creado)}</td>
+      <td class="dur">${formatTime(track.duracion_seg)}</td>
+    </tr>`;
+}
+
+function table(tracks, title) {
+  if (!tracks.length) {
+    return `<div class="empty">No hay temas para mostrar.</div>`;
+  }
+  const rows = tracks.map((track, index) => row(track, index)).join("");
+  return `
+    <div class="section-head"><h2>${escapeHtml(title)}</h2><span class="muted">${tracks.length} temas</span></div>
+    <table class="list">
+      <thead><tr><th>#</th><th>Título</th><th>Estilo</th><th>Fecha</th><th>Duración</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+}
+
+function rowStrip(title, tracks, action) {
+  if (!tracks.length) return "";
+  return `
+    <section>
+      <div class="section-head">
+        <h2>${escapeHtml(title)}</h2>
+        ${action ? `<button class="linkish" data-jump="${action}">Mostrar todo</button>` : ""}
+      </div>
+      <div class="cards">${tracks.slice(0, 14).map(card).join("")}</div>
+    </section>`;
+}
+
+function renderHome() {
+  const latest = state.tracks[0];
+  const recent = state.recent.map(byId).filter(Boolean);
+  const popular = [...state.tracks].sort((a, b) => b.reproducciones - a.reproducciones).slice(0, 14);
+  const liked = state.tracks.filter((track) => state.likes.has(track.id));
+  const hero = latest
+    ? `
+      <section class="hero">
+        <div class="hero-cover" style="${coverStyle(latest)}">
+          <button class="play-fab" data-play="${latest.id}" aria-label="Reproducir">${PLAY}</button>
+        </div>
+        <div>
+          <div class="kicker">Recién bajado</div>
+          <h1>${escapeHtml(latest.titulo)}</h1>
+          <p>${escapeHtml(latest.estilo_corto || latest.autor)}</p>
+          <div class="row-actions">
+            <button class="btn-green" data-play-all="recientes">Reproducir</button>
+            <button class="btn-ghost" data-jump="biblioteca">Ver biblioteca</button>
+          </div>
+        </div>
+      </section>`
+    : `<div class="empty">Todavía no hay temas bajados.</div>`;
+
+  viewEl.innerHTML = `
+    <div class="kicker">${greeting()}</div>
+    ${hero}
+    ${rowStrip("Escuchados hace un rato", recent)}
+    ${rowStrip("Los más reproducidos en Suno", popular)}
+    ${rowStrip("Tus me gusta", liked, "gustos")}
+    ${rowStrip("Últimos temas", state.tracks.slice(0, 14), "biblioteca")}`;
+}
+
+function render() {
+  const tracks = visibleTracks();
+  if (state.view === "inicio" && !state.query && !state.tag) {
+    renderHome();
+    return;
+  }
+  if (state.view === "buscar" && !state.query && !state.tag) {
+    viewEl.innerHTML = `
+      <div class="section-head"><h2>Buscar en la biblioteca</h2></div>
+      <div class="cards wrap">${state.tracks.slice(0, 18).map(card).join("")}</div>`;
+    return;
+  }
+  const title = state.tag || (state.view === "gustos" ? "Me gusta" : state.query ? `Resultados de “${state.query}”` : "Tu biblioteca");
+  if (state.view === "buscar" || state.tag) {
+    viewEl.innerHTML = `
+      <div class="section-head"><h2>${escapeHtml(title)}</h2><span class="muted">${tracks.length} temas</span></div>
+      <div class="cards wrap">${tracks.map(card).join("") || `<div class="empty">Nada coincide con esa búsqueda.</div>`}</div>
+      ${tracks.length ? table(tracks, "Lista") : ""}`;
+    return;
+  }
+  viewEl.innerHTML = table(tracks, title);
+}
+
+function renderTags() {
+  tagList.innerHTML = state.tags
+    .map((tag) => `<button type="button" class="tag-btn" data-tag="${escapeHtml(tag)}"><span class="dot"></span>${escapeHtml(tag)}</button>`)
+    .join("");
+}
+
+function paintPlayer() {
+  const track = currentTrack();
+  const title = document.querySelector("#now-title");
+  const artist = document.querySelector("#now-artist");
+  const cover = document.querySelector("#now-cover");
+  const like = document.querySelector("#like-btn");
+  const link = document.querySelector("#suno-link");
+  document.querySelector("#play-icon").outerHTML = audio.paused ? PLAY.replace("<svg", '<svg id="play-icon"') : PAUSE.replace("<svg", '<svg id="play-icon"');
+  document.querySelector("#shuffle").classList.toggle("is-on", state.shuffle);
+  document.querySelector("#repeat").classList.toggle("is-on", state.repeat !== "off");
+  document.querySelector("#repeat").dataset.mode = state.repeat;
+  if (!track) {
+    title.textContent = "Elegí un tema";
+    artist.textContent = `${state.tracks.length} temas en la biblioteca`;
+    cover.style.cssText = "";
+    like.classList.remove("is-on");
+    link.hidden = true;
+    return;
+  }
+  title.textContent = track.titulo;
+  artist.textContent = track.etiquetas[0] || track.autor;
+  cover.style.cssText = coverStyle(track);
+  like.classList.toggle("is-on", state.likes.has(track.id));
+  like.textContent = state.likes.has(track.id) ? "♥" : "♡";
+  link.hidden = !track.url_suno;
+  link.href = track.url_suno || "#";
+  document.title = `${track.titulo} — Suno`;
+}
+
+async function loadLyrics(track) {
+  if (state.lyrics.has(track.id)) return state.lyrics.get(track.id);
+  const response = await fetch(`/api/temas/${track.id}`);
+  if (!response.ok) return "";
+  const detail = await response.json();
+  state.lyrics.set(track.id, detail.letra || "");
+  return detail.letra || "";
+}
+
+function formatLyrics(text) {
+  if (!text.trim()) return `<p class="muted">Este tema no tiene letra guardada.</p>`;
+  return `<div class="lyrics">${escapeHtml(text).replace(/^\[(.+)\]/gm, '<span class="section">[$1]</span>')}</div>`;
+}
+
+async function renderPanel() {
+  if (panel.hidden) return;
+  const track = currentTrack();
+  if (state.tab === "cola") {
+    panelBody.innerHTML = state.queue
+      .map((item, index) => `
+        <button class="queue-item ${index === state.index ? "is-current" : ""}" data-queue="${index}">
+          <div class="row-cover" style="${coverStyle(item)}"></div>
+          <div class="stack"><strong>${escapeHtml(item.titulo)}</strong><span class="muted">${formatTime(item.duracion_seg)}</span></div>
+        </button>`)
+      .join("") || `<p class="muted">La cola está vacía.</p>`;
+    return;
+  }
+  if (!track) {
+    panelBody.innerHTML = `<p class="muted">Reproducí un tema para ver la letra.</p>`;
+    return;
+  }
+  panelBody.innerHTML = `<p class="muted">Cargando letra…</p>`;
+  const lyrics = await loadLyrics(track);
+  if (currentTrack()?.id !== track.id || state.tab !== "letra") return;
+  panelBody.innerHTML = formatLyrics(lyrics);
+}
+
+function openPanel(tab) {
+  state.tab = tab;
+  panel.hidden = false;
+  shell.classList.add("has-panel");
+  document.querySelectorAll(".panel-tabs button[data-tab]").forEach((button) => {
+    button.classList.toggle("is-active", button.dataset.tab === tab);
+  });
+  renderPanel();
+}
+
+function closePanel() {
+  panel.hidden = true;
+  shell.classList.remove("has-panel");
+}
+
+function shuffled(list) {
+  const copy = [...list];
+  for (let index = copy.length - 1; index > 0; index -= 1) {
+    const swap = Math.floor(Math.random() * (index + 1));
+    [copy[index], copy[swap]] = [copy[swap], copy[index]];
+  }
+  return copy;
+}
+
+function playTrack(track, queue) {
+  if (queue) {
+    state.queue = state.shuffle ? [track, ...shuffled(queue.filter((item) => item.id !== track.id))] : [...queue];
+    state.index = state.queue.findIndex((item) => item.id === track.id);
+  }
+  if (state.index < 0) return;
+  audio.src = `/api/audio/${track.id}`;
+  audio.play().catch(() => {});
+  remember(track);
+  paintPlayer();
+  render();
+  renderPanel();
+}
+
+function playFromList(trackId, list) {
+  const track = list.find((item) => item.id === trackId) || byId(trackId);
+  if (!track) return;
+  if (currentTrack()?.id === trackId) {
+    if (audio.paused) audio.play();
+    else audio.pause();
+    return;
+  }
+  const queue = list.length ? list : state.tracks;
+  playTrack(track, queue);
+}
+
+function step(direction) {
+  if (!state.queue.length) return;
+  if (direction > 0 && state.repeat === "one") {
+    audio.currentTime = 0;
+    audio.play();
+    return;
+  }
+  let next = state.index + direction;
+  if (next >= state.queue.length) {
+    if (state.repeat !== "all" && direction > 0) {
+      audio.pause();
+      paintPlayer();
+      return;
+    }
+    next = 0;
+  }
+  if (next < 0) next = 0;
+  state.index = next;
+  playTrack(state.queue[state.index]);
+}
+
+searchInput.addEventListener("input", () => {
+  state.query = searchInput.value;
+  if (state.query && state.view === "inicio") state.view = "buscar";
+  document.querySelectorAll(".nav-btn").forEach((button) => {
+    button.classList.toggle("is-active", button.dataset.view === state.view && !state.tag);
+  });
+  render();
+});
+
+document.body.addEventListener("click", (event) => {
+  const nav = event.target.closest(".nav-btn");
+  if (nav) {
+    state.query = "";
+    searchInput.value = "";
+    setView(nav.dataset.view);
+    return;
+  }
+  const tag = event.target.closest(".tag-btn");
+  if (tag) {
+    setView("buscar", tag.dataset.tag);
+    return;
+  }
+  const jump = event.target.closest("[data-jump]");
+  if (jump) {
+    setView(jump.dataset.jump);
+    return;
+  }
+  const playAll = event.target.closest("[data-play-all]");
+  if (playAll) {
+    const list = state.tracks;
+    if (list[0]) playFromList(list[0].id, list);
+    return;
+  }
+  const fab = event.target.closest("[data-play]");
+  if (fab) {
+    event.stopPropagation();
+    const list = state.view === "inicio" && !state.query ? state.tracks : visibleTracks();
+    playFromList(fab.dataset.play, list);
+    return;
+  }
+  const rowClick = event.target.closest("tr.track, .card");
+  if (rowClick?.dataset.id) {
+    const list = visibleTracks();
+    playFromList(rowClick.dataset.id, list.length ? list : state.tracks);
+    return;
+  }
+  const queueItem = event.target.closest("[data-queue]");
+  if (queueItem) {
+    state.index = Number(queueItem.dataset.queue);
+    playTrack(state.queue[state.index]);
+  }
+});
+
+document.querySelector("#play").addEventListener("click", () => {
+  if (!currentTrack()) {
+    if (state.tracks[0]) playFromList(state.tracks[0].id, state.tracks);
+    return;
+  }
+  if (audio.paused) audio.play();
+  else audio.pause();
+});
+document.querySelector("#next").addEventListener("click", () => step(1));
+document.querySelector("#prev").addEventListener("click", () => {
+  if (audio.currentTime > 3) {
+    audio.currentTime = 0;
+    return;
+  }
+  step(-1);
+});
+document.querySelector("#shuffle").addEventListener("click", () => {
+  state.shuffle = !state.shuffle;
+  const track = currentTrack();
+  if (track && state.queue.length) {
+    const rest = state.queue.filter((item) => item.id !== track.id);
+    state.queue = state.shuffle ? [track, ...shuffled(rest)] : [track, ...rest];
+    state.index = 0;
+  }
+  paintPlayer();
+  renderPanel();
+});
+document.querySelector("#repeat").addEventListener("click", () => {
+  state.repeat = state.repeat === "off" ? "all" : state.repeat === "all" ? "one" : "off";
+  paintPlayer();
+});
+document.querySelector("#like-btn").addEventListener("click", () => {
+  const track = currentTrack();
+  if (!track) return;
+  if (state.likes.has(track.id)) state.likes.delete(track.id);
+  else state.likes.add(track.id);
+  saveLikes();
+  paintPlayer();
+  if (state.view === "gustos" || state.view === "inicio") render();
+});
+document.querySelector("#lyrics-btn").addEventListener("click", () => {
+  if (!panel.hidden && state.tab === "letra") closePanel();
+  else openPanel("letra");
+});
+document.querySelector("#close-panel").addEventListener("click", closePanel);
+document.querySelectorAll(".panel-tabs button[data-tab]").forEach((button) => {
+  button.addEventListener("click", () => openPanel(button.dataset.tab));
+});
+
+const seek = document.querySelector("#seek");
+seek.addEventListener("pointerdown", () => {
+  state.seeking = true;
+});
+seek.addEventListener("input", () => {
+  if (!audio.duration) return;
+  document.querySelector("#time-current").textContent = formatTime((seek.value / 1000) * audio.duration);
+});
+seek.addEventListener("change", () => {
+  if (audio.duration) audio.currentTime = (seek.value / 1000) * audio.duration;
+  state.seeking = false;
+});
+document.querySelector("#volume").addEventListener("input", (event) => {
+  audio.volume = Number(event.target.value);
+  localStorage.setItem("suno-volume", String(audio.volume));
+});
+
+audio.addEventListener("timeupdate", () => {
+  document.querySelector("#time-current").textContent = formatTime(audio.currentTime);
+  document.querySelector("#time-total").textContent = formatTime(audio.duration || currentTrack()?.duracion_seg || 0);
+  if (!state.seeking && audio.duration) seek.value = String(Math.floor((audio.currentTime / audio.duration) * 1000));
+});
+audio.addEventListener("play", paintPlayer);
+audio.addEventListener("pause", paintPlayer);
+audio.addEventListener("ended", () => step(1));
+audio.addEventListener("error", () => {
+  const artist = document.querySelector("#now-artist");
+  if (currentTrack()) artist.textContent = "Este archivo está cifrado por Suno y el navegador no puede abrirlo";
+});
+
+document.addEventListener("keydown", (event) => {
+  if (event.target.matches("input, textarea")) return;
+  if (event.code === "Space") {
+    event.preventDefault();
+    document.querySelector("#play").click();
+  } else if (event.code === "ArrowRight") {
+    audio.currentTime = Math.min((audio.duration || 0), audio.currentTime + 5);
+  } else if (event.code === "ArrowLeft") {
+    audio.currentTime = Math.max(0, audio.currentTime - 5);
+  }
+});
+
+async function boot() {
+  const savedVolume = Number(localStorage.getItem("suno-volume"));
+  if (Number.isFinite(savedVolume)) {
+    audio.volume = savedVolume;
+    document.querySelector("#volume").value = String(savedVolume);
+  } else {
+    audio.volume = 0.85;
+  }
+  const response = await fetch("/api/temas");
+  const payload = await response.json();
+  state.tracks = payload.temas;
+  state.tags = payload.etiquetas;
+  renderTags();
+  render();
+  paintPlayer();
+}
+
+boot();
