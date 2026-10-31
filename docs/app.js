@@ -28,7 +28,13 @@ const state = {
   embedTick: 0,
   embedStarted: 0,
   usingEmbed: false,
+  embedPool: new Map(),
+  warmVisibleTimer: 0,
+  hoverWarmTimer: 0,
 };
+
+const EMBED_POOL_MAX = 6;
+const CLOUDFRONT_CLIP = (id) => `https://d2lwuy8qc234o3.cloudfront.net/1/clip/${encodeURIComponent(id)}.m4a`;
 
 const PLAY = `<svg viewBox="0 0 24 24"><path d="M8 5v14l12-7z"/></svg>`;
 const PAUSE = `<svg viewBox="0 0 24 24"><path d="M6 5h4v14H6zm8 0h4v14h-4z"/></svg>`;
@@ -241,12 +247,14 @@ function render() {
   const tracks = visibleTracks();
   if (state.view === "inicio" && !state.query && !state.tag) {
     renderHome();
+    scheduleWarmVisible();
     return;
   }
   if (state.view === "buscar" && !state.query && !state.tag) {
     viewEl.innerHTML = `
       <div class="section-head"><h2>Buscar en la biblioteca</h2></div>
       <div class="cards wrap">${state.tracks.slice(0, 18).map(card).join("")}</div>`;
+    scheduleWarmVisible();
     return;
   }
   const title = state.tag || (state.view === "gustos" ? "Me gusta" : state.view === "nuevos" ? "Temas nuevos" : state.query ? `Resultados de “${state.query}”` : "Tu biblioteca");
@@ -255,9 +263,11 @@ function render() {
       <div class="section-head"><h2>${escapeHtml(title)}</h2><span class="muted">${tracks.length} temas</span></div>
       <div class="cards wrap">${tracks.map(card).join("") || `<div class="empty">Nada coincide con esa búsqueda.</div>`}</div>
       ${tracks.length ? table(tracks, "Lista") : ""}`;
+    scheduleWarmVisible();
     return;
   }
   viewEl.innerHTML = table(tracks, title);
+  scheduleWarmVisible();
 }
 
 function renderTags() {
@@ -345,6 +355,113 @@ function embedFrame() {
   return document.querySelector("#embed-player");
 }
 
+function embedPoolEl() {
+  return document.querySelector("#embed-pool");
+}
+
+function embedPlayUrl(trackId) {
+  return `https://suno.com/embed/${encodeURIComponent(trackId)}?autoplay=1`;
+}
+
+function embedWarmUrl(trackId) {
+  return `https://suno.com/embed/${encodeURIComponent(trackId)}`;
+}
+
+function shouldUseEmbedPool() {
+  return !state.localApi;
+}
+
+function prefetchClipMedia(trackId) {
+  if (!trackId) return;
+  fetch(CLOUDFRONT_CLIP(trackId), { mode: "no-cors", cache: "force-cache" }).catch(() => {});
+}
+
+function evictEmbedPool(keepIds = new Set()) {
+  if (state.embedPool.size < EMBED_POOL_MAX) return;
+  const playingId = currentTrack()?.id;
+  if (playingId) keepIds.add(playingId);
+  for (const [trackId, entry] of state.embedPool) {
+    if (state.embedPool.size < EMBED_POOL_MAX) break;
+    if (keepIds.has(trackId)) continue;
+    entry.iframe.remove();
+    state.embedPool.delete(trackId);
+  }
+}
+
+function warmEmbed(trackId, { intent = false } = {}) {
+  if (!shouldUseEmbedPool() || !trackId) return;
+  const existing = state.embedPool.get(trackId);
+  if (existing) {
+    if (intent && !existing.intent) {
+      existing.intent = true;
+      existing.status = "loading";
+      existing.iframe.src = embedPlayUrl(trackId);
+    }
+    return;
+  }
+  evictEmbedPool(new Set([trackId]));
+  const pool = embedPoolEl();
+  if (!pool) return;
+  const iframe = document.createElement("iframe");
+  iframe.className = "embed-engine embed-pool-frame";
+  iframe.title = "Precarga";
+  iframe.allow = "autoplay; encrypted-media; clipboard-write";
+  iframe.src = intent ? embedPlayUrl(trackId) : embedWarmUrl(trackId);
+  pool.appendChild(iframe);
+  const entry = { iframe, status: "loading", intent, trackId };
+  state.embedPool.set(trackId, entry);
+  iframe.addEventListener(
+    "load",
+    () => {
+      if (state.embedPool.get(trackId) === entry) entry.status = "ready";
+    },
+    { once: true },
+  );
+  prefetchClipMedia(trackId);
+}
+
+function visibleTrackIds() {
+  const ids = [];
+  const seen = new Set();
+  for (const node of viewEl.querySelectorAll(".card[data-id], tr.track[data-id]")) {
+    const rect = node.getBoundingClientRect();
+    if (rect.bottom < -24 || rect.top > window.innerHeight + 24) continue;
+    const id = node.dataset.id;
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    ids.push(id);
+  }
+  return ids.slice(0, EMBED_POOL_MAX);
+}
+
+function scheduleWarmVisible() {
+  if (!shouldUseEmbedPool()) return;
+  window.clearTimeout(state.warmVisibleTimer);
+  state.warmVisibleTimer = window.setTimeout(() => {
+    visibleTrackIds().forEach((trackId, index) => {
+      window.setTimeout(() => warmEmbed(trackId), index * 250);
+    });
+  }, 100);
+}
+
+function retireEmbedFrame(iframe) {
+  if (!iframe) return;
+  iframe.removeAttribute("id");
+  iframe.className = "embed-engine embed-pool-frame";
+  iframe.removeAttribute("src");
+  embedPoolEl()?.appendChild(iframe);
+}
+
+function attachMainEmbed(iframe) {
+  const current = embedFrame();
+  if (current === iframe) return;
+  if (current) retireEmbedFrame(current);
+  iframe.id = "embed-player";
+  iframe.className = "embed-engine";
+  iframe.title = "Audio";
+  document.body.appendChild(iframe);
+}
+
 function stopEmbed() {
   window.clearTimeout(state.embedTimer);
   window.clearInterval(state.embedTick);
@@ -370,13 +487,7 @@ function tickEmbedProgress() {
   }
 }
 
-function playInPage(track) {
-  audio.pause();
-  audio.removeAttribute("src");
-  state.usingEmbed = true;
-  state.embedStarted = Date.now();
-  const frame = embedFrame();
-  frame.src = `https://suno.com/embed/${encodeURIComponent(track.id)}?auto_play=true&autoplay=1`;
+function startEmbedTimers(track) {
   window.clearTimeout(state.embedTimer);
   window.clearInterval(state.embedTick);
   state.embedTick = window.setInterval(tickEmbedProgress, 400);
@@ -384,6 +495,30 @@ function playInPage(track) {
   if (track.duracion_seg > 0) {
     state.embedTimer = window.setTimeout(() => step(1), Math.max(1000, track.duracion_seg * 1000));
   }
+}
+
+function playInPage(track) {
+  audio.pause();
+  audio.removeAttribute("src");
+  state.usingEmbed = true;
+  state.embedStarted = Date.now();
+  prefetchClipMedia(track.id);
+
+  const pooled = state.embedPool.get(track.id);
+  let frame = embedFrame();
+  if (pooled?.status === "ready") {
+    state.embedPool.delete(track.id);
+    attachMainEmbed(pooled.iframe);
+    frame = pooled.iframe;
+    if (!pooled.intent) frame.src = embedPlayUrl(track.id);
+  } else {
+    attachMainEmbed(frame);
+    const url = embedPlayUrl(track.id);
+    if (!frame.src?.includes(track.id) || !frame.src.includes("autoplay=1")) frame.src = url;
+  }
+
+  startEmbedTimers(track);
+  scheduleWarmVisible();
 }
 
 async function loadLyrics(track) {
@@ -507,6 +642,15 @@ function step(direction) {
   state.index = next;
   playTrack(state.queue[state.index]);
 }
+
+viewEl.addEventListener("mouseover", (event) => {
+  const playFab = event.target.closest("[data-play]");
+  const row = event.target.closest(".card[data-id], tr.track[data-id]");
+  const trackId = playFab?.dataset.play || row?.dataset.id;
+  if (!trackId) return;
+  window.clearTimeout(state.hoverWarmTimer);
+  state.hoverWarmTimer = window.setTimeout(() => warmEmbed(trackId, { intent: true }), 60);
+});
 
 searchInput.addEventListener("input", () => {
   state.query = searchInput.value;

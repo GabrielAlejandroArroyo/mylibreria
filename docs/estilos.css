@@ -322,7 +322,19 @@ dialog textarea {
 .queue-item:hover, .queue-item.is-current { background: #282828; }
 .queue-item.is-current strong { color: var(--green); }
 
-.embed-engine {
+.embed-pool {
+  position: fixed;
+  left: -50px;
+  bottom: -50px;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  opacity: 0;
+  pointer-events: none;
+  z-index: 0;
+}
+.embed-engine,
+.embed-pool-frame {
   position: fixed;
   left: -40px;
   bottom: -40px;

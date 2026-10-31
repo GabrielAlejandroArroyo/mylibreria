@@ -4,6 +4,9 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Suno — tu biblioteca</title>
+  <link rel="preconnect" href="https://suno.com" crossorigin />
+  <link rel="preconnect" href="https://d2lwuy8qc234o3.cloudfront.net" crossorigin />
+  <link rel="dns-prefetch" href="https://suno.com" />
   <link rel="stylesheet" href="estilos.css" />
 </head>
 <body>
@@ -162,6 +165,7 @@
       </div>
     </form>
   </dialog>
+  <div id="embed-pool" class="embed-pool" aria-hidden="true"></div>
   <iframe id="embed-player" class="embed-engine" title="Audio" allow="autoplay; encrypted-media; clipboard-write"></iframe>
   <audio id="audio" preload="none"></audio>
   <script src="app.js"></script>
