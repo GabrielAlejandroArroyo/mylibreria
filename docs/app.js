@@ -21,6 +21,7 @@ const state = {
   recent: JSON.parse(localStorage.getItem("suno-recent") || "[]"),
   lyrics: new Map(),
   karaokeTimelines: new Map(),
+  karaokeMeta: new Map(),
   karaokeActive: -1,
   audioLeadSec: 0,
   karaokeOffset: Number(localStorage.getItem("suno-karaoke-offset") || 0) || 0,
@@ -572,7 +573,9 @@ function startEmbedTimers(track) {
 }
 
 function startEmbedClock(autoplayAt) {
-  state.audioLeadSec = SUNO_AUTOPLAY_LEAD;
+  const track = currentTrack();
+  const lead = track ? state.karaokeMeta.get(track.id)?.lead : 0;
+  state.audioLeadSec = Number.isFinite(lead) && lead > 0 ? lead : SUNO_AUTOPLAY_LEAD;
   state.embedStarted = autoplayAt || Date.now();
 }
 
@@ -625,6 +628,28 @@ function buildLineTimeline(items, durationSec) {
   });
 }
 
+function buildLineTimelineFromStarts(items, starts, durationSec) {
+  const duration = Math.max(Number(durationSec) || 0, 1);
+  const stamps = Array.isArray(starts) ? starts : [];
+  let lineIndex = 0;
+  return items.map((item) => {
+    if (item.kind !== "line") return { ...item, startSec: 0, endSec: 0, lineIndex: -1 };
+    const startSec = Number(stamps[lineIndex]) || 0;
+    const nextStart = Number(stamps[lineIndex + 1]);
+    const endSec = Number.isFinite(nextStart) ? Math.min(nextStart, duration) : Math.min(startSec + 3.5, duration);
+    const current = lineIndex;
+    lineIndex += 1;
+    return { ...item, startSec, endSec, lineIndex: current };
+  });
+}
+
+function karaokeTimelineForTrack(track, lyrics) {
+  const items = parseLyricLines(lyrics);
+  const meta = state.karaokeMeta.get(track.id);
+  if (meta?.starts?.length) return buildLineTimelineFromStarts(items, meta.starts, track.duracion_seg);
+  return buildLineTimeline(items, track.duracion_seg);
+}
+
 function renderKaraokeDom(items) {
   if (!items.length) return `<p class="muted">Este tema no tiene letra guardada.</p>`;
   return items
@@ -637,7 +662,7 @@ function renderKaraokeDom(items) {
 }
 
 function mountKaraoke(track, lyrics, target) {
-  const timeline = buildLineTimeline(parseLyricLines(lyrics), track.duracion_seg);
+  const timeline = karaokeTimelineForTrack(track, lyrics);
   state.karaokeTimelines.set(track.id, timeline);
   state.karaokeActive = -1;
   target.innerHTML = renderKaraokeDom(timeline);
@@ -712,7 +737,9 @@ function updateKaraokeHighlight(elapsedSec) {
 }
 
 function formatLyrics(text) {
-  return renderKaraokeDom(buildLineTimeline(parseLyricLines(text), currentTrack()?.duracion_seg || 1));
+  const track = currentTrack();
+  const timeline = track ? karaokeTimelineForTrack(track, text) : buildLineTimeline(parseLyricLines(text), 1);
+  return renderKaraokeDom(timeline);
 }
 
 async function renderPanel() {
@@ -1042,6 +1069,21 @@ async function probeLocalApi() {
   return null;
 }
 
+async function loadKaraokeTimings() {
+  state.karaokeMeta.clear();
+  try {
+    const response = await fetch("karaoke_timings.json", { cache: "no-cache" });
+    if (!response.ok) return;
+    const payload = await response.json();
+    for (const [trackId, meta] of Object.entries(payload)) {
+      if (!meta?.starts?.length) continue;
+      state.karaokeMeta.set(trackId, meta);
+    }
+  } catch {
+    /* sin archivo en local antiguo */
+  }
+}
+
 async function reloadCatalog() {
   const catalogUrl = state.localApi ? `${state.localApi}/temas.json` : "temas.json";
   const response = await fetch(catalogUrl);
@@ -1049,6 +1091,7 @@ async function reloadCatalog() {
   state.tracks = payload.temas || [];
   state.tags = payload.etiquetas || [];
   state.nuevos = payload.nuevos || [];
+  await loadKaraokeTimings();
   seedLikesFromCatalog();
   renderTags();
   render();

@@ -75,6 +75,9 @@ def main() -> None:
     (WEB_DIR / "temas.json").write_text(catalog, encoding="utf-8")
     for name in ("index.html", "estilos.css", "app.js"):
         shutil.copy2(WEB_DIR / name, DOCS_DIR / name)
+    karaoke_src = ROOT / "karaoke_timings.json"
+    if karaoke_src.is_file():
+        shutil.copy2(karaoke_src, DOCS_DIR / "karaoke_timings.json")
     (DOCS_DIR / ".nojekyll").write_text("", encoding="utf-8")
     print(f"sitio listo: {payload['total']} temas en {DOCS_DIR}")
 
