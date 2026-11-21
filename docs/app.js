@@ -1313,7 +1313,6 @@ async function syncSunoLibrary() {
     }
     await reloadCatalog();
     const names = (payload.titulos_nuevos || []).slice(0, 3).join(", ");
-    const cuando = formatSyncTime(new Date().toISOString());
     setSyncStatus(
       payload.nuevos
         ? `Biblioteca actualizada · ${payload.nuevos} tema(s) nuevo(s)${names ? `: ${names}` : ""}`
