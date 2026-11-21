@@ -227,6 +227,8 @@ def sincronizar(*, publicar_web: bool = False, limitar_nuevos: int = 0) -> dict:
 
 
 def main() -> None:
+    import sys
+
     parser = argparse.ArgumentParser(description="Sincroniza tu biblioteca de Suno")
     parser.add_argument("--publicar-web", action="store_true", help="Copia audios nuevos chicos a docs/audio")
     parser.add_argument("--limitar", type=int, default=0, help="Procesa como máximo N temas")
@@ -235,9 +237,13 @@ def main() -> None:
 
     if not load_env().get("SUNO_COOKIE"):
         print(json.dumps({"ok": False, "error": "Falta SUNO_COOKIE"}, ensure_ascii=False))
-        return
-    resultado = sincronizar(publicar_web=args.publicar_web, limitar_nuevos=args.limitar)
-    print(json.dumps(resultado, ensure_ascii=False, indent=2))
+        sys.exit(1)
+    try:
+        resultado = sincronizar(publicar_web=args.publicar_web, limitar_nuevos=args.limitar)
+    except Exception as exc:
+        print(json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False))
+        sys.exit(1)
+    print(json.dumps({"ok": True, **resultado}, ensure_ascii=False, indent=2))
 
 
 if __name__ == "__main__":

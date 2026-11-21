@@ -1308,7 +1308,13 @@ async function syncSunoLibrary() {
     const response = await fetch(`${state.localApi}/api/sincronizar`, { method: "POST" });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) {
-      setSyncStatus(payload.detail || "Falló la sincronización");
+      const detail = String(payload.detail || payload.error || "");
+      if (detail.includes("SUNO_COOKIE") || detail.includes("cookie")) {
+        setSyncStatus("Falta conectar Suno: pegá la cookie y volvé a Actualizar.");
+        document.querySelector("#session-dialog").showModal();
+      } else {
+        setSyncStatus(detail || "Falló la sincronización");
+      }
       return;
     }
     await reloadCatalog();

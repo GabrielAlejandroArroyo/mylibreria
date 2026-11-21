@@ -19,6 +19,13 @@ jobs:
           python-version: "3.12"
       - name: Instalar
         run: python -m pip install -r requirements.txt
+      - name: Verificar SUNO_COOKIE
+        shell: pwsh
+        run: |
+          if (-not $env:SUNO_COOKIE) {
+            Write-Error "Falta el secret SUNO_COOKIE en GitHub (Settings → Secrets → Actions). Sin eso no se trae tu biblioteca."
+            exit 1
+          }
       - name: Sincronizar
         env:
           SUNO_COOKIE: ${{ secrets.SUNO_COOKIE }}
