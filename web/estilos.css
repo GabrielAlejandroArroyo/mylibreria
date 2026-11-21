@@ -136,14 +136,20 @@ a { color: inherit; }
 }
 .search-wrap:focus-within { outline: 1px solid #fff; color: #fff; }
 .sync-bar {
-  display: none;
+  display: flex;
   gap: 10px;
   align-items: center;
   flex-wrap: wrap;
   margin: 0 0 12px;
 }
-body.is-local .sync-bar { display: flex; }
-.sync-bar span { color: var(--muted); font-size: 13px; }
+body:not(.is-local) .sync-hint-local {
+  display: inline-flex;
+}
+body.is-local .sync-hint-local {
+  display: none !important;
+}
+.sync-bar span { color: var(--muted); font-size: 13px; flex: 1 1 180px; }
+#sync-btn[disabled] { opacity: 0.55; cursor: wait; }
 .badge-new {
   display: inline-block;
   margin-left: 6px;

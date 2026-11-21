@@ -242,11 +242,23 @@ def sincronizar_ahora() -> dict:
     try:
         resultado = sincronizar(publicar_web=True)
         invalidate_cache()
+        resultado["ok"] = True
         return resultado
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     finally:
         _sync_lock.release()
+
+
+@app.get("/api/recargar")
+def recargar_catalogo() -> dict:
+    from generar_sitio import build_tracks
+    import generar_sitio as gs
+
+    gs.main()
+    invalidate_cache()
+    payload = build_tracks()
+    return {"ok": True, "total": payload["total"], "ultima_sync": payload.get("ultima_sync")}
 
 
 @app.get("/api/temas")

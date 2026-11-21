@@ -36,6 +36,7 @@ const state = {
   localApi: "",
   nuevos: [],
   syncing: false,
+  tieneSesion: false,
   embedTimer: 0,
   embedTick: 0,
   embedStarted: 0,
@@ -1216,6 +1217,13 @@ document.addEventListener("keydown", (event) => {
   }
 });
 
+function setSyncControls() {
+  const sessionBtn = document.querySelector("#session-btn");
+  const openLocal = document.querySelector("#open-local");
+  if (sessionBtn) sessionBtn.hidden = Boolean(state.localApi && state.tieneSesion);
+  if (openLocal) openLocal.hidden = Boolean(state.localApi);
+}
+
 function setSyncStatus(text) {
   const node = document.querySelector("#sync-status");
   if (node) node.textContent = text;
@@ -1224,25 +1232,100 @@ function setSyncStatus(text) {
 async function probeLocalApi() {
   const candidates = ["localhost", "127.0.0.1"].includes(location.hostname)
     ? [""]
-    : location.protocol === "http:"
-      ? ["http://127.0.0.1:8765"]
-      : [""];
+    : ["http://127.0.0.1:8765", ""];
   for (const base of candidates) {
     try {
       const response = await fetch(`${base}/api/ping`);
       if (!response.ok) continue;
       const ping = await response.json();
       state.localApi = base;
+      state.tieneSesion = Boolean(ping.tiene_sesion);
       document.body.classList.add("is-local");
+      setSyncControls();
       const extra = ping.nuevos ? ` · ${ping.nuevos} nuevos` : "";
-      setSyncStatus(ping.tiene_sesion ? `Suno conectado${extra}` : "Reproductor local listo. Falta conectar Suno.");
+      const cuando = ping.ultima_sync ? ` · Última sync ${formatSyncTime(ping.ultima_sync)}` : "";
+      setSyncStatus(
+        ping.tiene_sesion
+          ? `Biblioteca Suno conectada${extra}${cuando}`
+          : "Conectá Suno para traer tu biblioteca, o usá Actualizar cuando ya esté la cookie.",
+      );
       return ping;
     } catch {
       continue;
     }
   }
-  setSyncStatus("Estás en GitHub Pages. Para escuchar todo, abrí el reproductor local.");
+  document.body.classList.remove("is-local");
+  state.localApi = "";
+  state.tieneSesion = false;
+  setSyncControls();
+  setSyncStatus("En la web pública solo se refresca el catálogo publicado. Para tu biblioteca Suno usá el reproductor local.");
   return null;
+}
+
+function formatSyncTime(iso) {
+  if (!iso) return "";
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleString("es-AR", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+}
+
+async function reloadCatalogFromPublished() {
+  const catalogUrl = `temas.json?t=${Date.now()}`;
+  const response = await fetch(catalogUrl, { cache: "no-store" });
+  const payload = await response.json();
+  state.tracks = payload.temas || [];
+  state.tags = payload.etiquetas || [];
+  state.nuevos = payload.nuevos || [];
+  await loadKaraokeTimings();
+  seedLikesFromCatalog();
+  renderTags();
+  render();
+  paintPlayer();
+  const cuando = formatSyncTime(payload.ultima_sync);
+  setSyncStatus(`Lista actualizada: ${payload.total || state.tracks.length} temas${cuando ? ` · ${cuando}` : ""}.`);
+}
+
+async function syncSunoLibrary() {
+  if (!state.localApi) {
+    const linked = await probeLocalApi();
+    if (!linked) {
+      window.open("http://127.0.0.1:8765/", "_blank", "noopener");
+      setSyncStatus("Abrí el reproductor local, conectá Suno y tocá Actualizar biblioteca.");
+      return;
+    }
+  }
+  if (!state.tieneSesion) {
+    setSyncStatus("Primero conectá tu cuenta Suno.");
+    document.querySelector("#session-dialog").showModal();
+    return;
+  }
+  const syncBtn = document.querySelector("#sync-btn");
+  if (state.syncing) return;
+  state.syncing = true;
+  if (syncBtn) syncBtn.disabled = true;
+  setSyncStatus("Trayendo tu biblioteca de Suno… puede tardar un poco.");
+  try {
+    const response = await fetch(`${state.localApi}/api/sincronizar`, { method: "POST" });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      setSyncStatus(payload.detail || "Falló la sincronización");
+      return;
+    }
+    await reloadCatalog();
+    const names = (payload.titulos_nuevos || []).slice(0, 3).join(", ");
+    const cuando = formatSyncTime(new Date().toISOString());
+    setSyncStatus(
+      payload.nuevos
+        ? `Biblioteca actualizada · ${payload.nuevos} tema(s) nuevo(s)${names ? `: ${names}` : ""}`
+        : `Biblioteca al día · ${payload.total || state.tracks.length} temas en Suno`,
+    );
+    if (payload.nuevos) navigateTo("nuevos");
+  } catch {
+    setSyncStatus("No se pudo sincronizar. ¿Está corriendo el servidor en el puerto 8765?");
+  } finally {
+    state.syncing = false;
+    if (syncBtn) syncBtn.disabled = false;
+  }
 }
 
 async function loadKaraokeTimings() {
@@ -1262,8 +1345,10 @@ async function loadKaraokeTimings() {
 }
 
 async function reloadCatalog() {
-  const catalogUrl = state.localApi ? `${state.localApi}/temas.json` : "temas.json";
-  const response = await fetch(catalogUrl);
+  const catalogUrl = state.localApi
+    ? `${state.localApi}/temas.json?t=${Date.now()}`
+    : `temas.json?t=${Date.now()}`;
+  const response = await fetch(catalogUrl, { cache: "no-store" });
   const payload = await response.json();
   state.tracks = payload.temas || [];
   state.tags = payload.etiquetas || [];
@@ -1300,32 +1385,28 @@ document.querySelector("#session-form").addEventListener("submit", async (event)
     return;
   }
   document.querySelector("#session-dialog").close();
-  setSyncStatus("Sesión guardada. Sincronizando…");
-  document.querySelector("#sync-btn").click();
+  state.tieneSesion = true;
+  setSyncControls();
+  setSyncStatus("Sesión guardada. Sincronizando tu biblioteca…");
+  syncSunoLibrary();
 });
 document.querySelector("#sync-btn").addEventListener("click", async () => {
-  if (state.syncing) return;
-  if (!state.localApi && !["localhost", "127.0.0.1"].includes(location.hostname)) {
-    setSyncStatus("Actualizá desde el reproductor local o esperá el sync automático de GitHub.");
+  if (state.localApi || ["localhost", "127.0.0.1"].includes(location.hostname)) {
+    await syncSunoLibrary();
     return;
   }
+  if (state.syncing) return;
   state.syncing = true;
-  setSyncStatus("Buscando temas nuevos en Suno…");
+  const syncBtn = document.querySelector("#sync-btn");
+  if (syncBtn) syncBtn.disabled = true;
+  setSyncStatus("Descargando catálogo publicado…");
   try {
-    const response = await fetch(`${state.localApi}/api/sincronizar`, { method: "POST" });
-    const payload = await response.json();
-    if (!response.ok) {
-      setSyncStatus(payload.detail || "Falló la sincronización");
-      return;
-    }
-    await reloadCatalog();
-    const names = (payload.titulos_nuevos || []).slice(0, 3).join(", ");
-    setSyncStatus(payload.nuevos ? `Llegaron ${payload.nuevos} temas nuevos${names ? `: ${names}` : ""}` : "Biblioteca al día");
-    if (payload.nuevos) navigateTo("nuevos");
+    await reloadCatalogFromPublished();
   } catch {
-    setSyncStatus("No se pudo sincronizar");
+    setSyncStatus("No se pudo actualizar. Probá Ctrl+F5.");
   } finally {
     state.syncing = false;
+    if (syncBtn) syncBtn.disabled = false;
   }
 });
 
