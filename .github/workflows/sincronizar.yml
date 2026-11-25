@@ -28,14 +28,25 @@ jobs:
         run: python -m pip install -r requirements.txt
       - name: Regenerar sitio
         run: python generar_sitio.py
+      - name: Comprobar sesión Suno
+        id: suno
+        shell: pwsh
+        env:
+          SUNO_COOKIE: ${{ secrets.SUNO_COOKIE }}
+        run: |
+          if ($env:SUNO_COOKIE) {
+            "has_cookie=true" >> $env:GITHUB_OUTPUT
+          } else {
+            "has_cookie=false" >> $env:GITHUB_OUTPUT
+          }
       - name: Aviso sin sesión Suno
-        if: ${{ secrets.SUNO_COOKIE == '' }}
+        if: steps.suno.outputs.has_cookie != 'true'
         shell: pwsh
         run: |
           Write-Warning "Sin SUNO_COOKIE: se publica el catálogo del repo, sin traer temas nuevos de Suno."
           echo "::warning::Configurá el secret SUNO_COOKIE en Settings → Secrets → Actions para sincronizar tu biblioteca."
       - name: Sincronizar biblioteca Suno
-        if: ${{ secrets.SUNO_COOKIE != '' }}
+        if: steps.suno.outputs.has_cookie == 'true'
         env:
           SUNO_COOKIE: ${{ secrets.SUNO_COOKIE }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
