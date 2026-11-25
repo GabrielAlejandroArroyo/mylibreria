@@ -1258,7 +1258,9 @@ async function probeLocalApi() {
   state.localApi = "";
   state.tieneSesion = false;
   setSyncControls();
-  setSyncStatus("En la web pública solo se refresca el catálogo publicado. Para tu biblioteca Suno usá el reproductor local.");
+  setSyncStatus(
+    "En la web se muestra el catálogo publicado. Para traer tu biblioteca Suno: reproductor local o secret SUNO_COOKIE en GitHub Actions.",
+  );
   return null;
 }
 
